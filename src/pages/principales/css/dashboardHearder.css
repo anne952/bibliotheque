@@ -1,0 +1,25 @@
+.dashboard-header {
+  margin-bottom: 2rem;
+}
+
+.dashboard-title {
+  font-size: 1.5rem;
+  font-weight: 700;
+  color: #1f2937;
+
+}
+
+@media (min-width: 768px) {
+  .dashboard-title {
+    font-size: 1.875rem;
+  }
+}
+
+.user-name {
+  color: #2563eb;
+}
+
+.dashboard-subtitle {
+  color: #4b5563;
+  margin-top: 0.5rem;
+}

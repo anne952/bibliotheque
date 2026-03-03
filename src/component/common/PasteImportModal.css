@@ -1,0 +1,127 @@
+.paste-import-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.4);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 1200;
+  padding: 16px;
+}
+
+.paste-import-modal {
+  width: 100%;
+  max-width: 720px;
+  background: #fff;
+  border-radius: 12px;
+  box-shadow: 0 20px 40px rgba(15, 23, 42, 0.25);
+  padding: 16px;
+}
+
+.paste-import-modal__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+}
+
+.paste-import-modal__header h3 {
+  margin: 0;
+  font-size: 1.1rem;
+}
+
+.paste-import-modal__close {
+  border: none;
+  background: transparent;
+  font-size: 1rem;
+  cursor: pointer;
+  color: #475569;
+}
+
+.paste-import-modal__subtitle {
+  margin: 8px 0 0;
+  color: #475569;
+  font-size: 0.9rem;
+}
+
+.paste-import-modal__columns {
+  margin-top: 12px;
+  padding: 10px;
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  font-size: 0.88rem;
+}
+
+.paste-import-modal__columns p {
+  margin: 6px 0 0;
+  color: #334155;
+}
+
+.paste-import-modal__textarea {
+  margin-top: 12px;
+  width: 100%;
+  min-height: 190px;
+  resize: vertical;
+  border: 1px solid #cbd5e1;
+  border-radius: 8px;
+  padding: 10px;
+  font-size: 0.92rem;
+}
+
+.paste-import-modal__result {
+  margin-top: 12px;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 0.9rem;
+}
+
+.paste-import-modal__result p {
+  margin: 0;
+}
+
+.paste-import-modal__result ul {
+  margin: 8px 0 0;
+  padding-left: 18px;
+}
+
+.paste-import-modal__result--ok {
+  background: #ecfdf5;
+  color: #065f46;
+  border: 1px solid #a7f3d0;
+}
+
+.paste-import-modal__result--error {
+  background: #fef2f2;
+  color: #991b1b;
+  border: 1px solid #fecaca;
+}
+
+.paste-import-modal__actions {
+  margin-top: 12px;
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+}
+
+.paste-import-modal__btn {
+  border: none;
+  border-radius: 8px;
+  padding: 8px 14px;
+  cursor: pointer;
+}
+
+.paste-import-modal__btn--cancel {
+  background: #e2e8f0;
+  color: #0f172a;
+}
+
+.paste-import-modal__btn--submit {
+  background: #2563eb;
+  color: #fff;
+}
+
+.paste-import-modal__btn:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}

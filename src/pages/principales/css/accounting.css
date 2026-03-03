@@ -1,0 +1,209 @@
+/* styles/accounting.css */
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap');
+
+* {
+  margin: 0;
+  padding: 0;
+  box-sizing: border-box;
+}
+
+body {
+  font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Roboto', sans-serif;
+  background-color: #FFE5D4;
+  color: #212121;
+}
+
+/* Classes utilitaires */
+.text-primary {
+  color: #003366;
+}
+
+.text-secondary {
+  color: #336699;
+}
+
+.bg-orange-pale {
+  background-color: #FFE5D4;
+}
+
+.bg-sycebnl {
+  background-color: #003366;
+}
+
+/* Boutons */
+.btn {
+  padding: 10px 20px;
+  border-radius: 6px;
+  border: none;
+  cursor: pointer;
+  font-weight: 500;
+  transition: all 0.3s ease;
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.btn-primary {
+  background-color: #003366;
+  color: white;
+}
+
+.btn-primary:hover {
+  background-color: #002244;
+}
+
+.btn-secondary {
+  background-color: #336699;
+  color: white;
+}
+
+.btn-secondary:hover {
+  background-color: #28527a;
+}
+
+.btn-accent {
+  background-color: #FF6B35;
+  color: white;
+}
+
+.btn-accent:hover {
+  background-color: #e55a2e;
+}
+
+/* Tableaux */
+.table-responsive {
+  overflow-x: auto;
+}
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+}
+
+.table th {
+  text-align: left;
+  padding: 12px;
+  background-color: #003366;
+  color: white;
+  font-weight: 600;
+}
+
+.table td {
+  padding: 12px;
+  border-bottom: 1px solid #e0e0e0;
+}
+
+.table tr:hover {
+  background-color: #FFF5EB;
+}
+
+/* Cartes */
+.card {
+  background-color: white;
+  border-radius: 10px;
+  padding: 20px;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.08);
+  border: 1px solid #F5F5F5;
+}
+
+/* Formulaires */
+.form-control {
+  padding: 10px;
+  border: 1px solid #9E9E9E;
+  border-radius: 6px;
+  font-size: 14px;
+  width: 100%;
+}
+
+.form-control:focus {
+  outline: none;
+  border-color: #003366;
+  box-shadow: 0 0 0 2px rgba(0, 51, 102, 0.1);
+}
+
+.form-label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 500;
+  color: #616161;
+}
+
+/* Badges */
+.badge {
+  display: inline-block;
+  padding: 4px 8px;
+  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 600;
+}
+
+.badge-success {
+  background-color: #4CAF50;
+  color: white;
+}
+
+.badge-warning {
+  background-color: #FF9800;
+  color: white;
+}
+
+.badge-danger {
+  background-color: #F44336;
+  color: white;
+}
+
+.badge-info {
+  background-color: #2196F3;
+  color: white;
+}
+
+/* Layout */
+.container {
+  max-width: 1200px;
+  margin: 0 auto;
+  padding: 0 20px;
+}
+
+.grid {
+  display: grid;
+  gap: 20px;
+}
+
+.grid-2 {
+  grid-template-columns: repeat(2, 1fr);
+}
+
+.grid-3 {
+  grid-template-columns: repeat(3, 1fr);
+}
+
+.grid-4 {
+  grid-template-columns: repeat(4, 1fr);
+}
+
+/* Responsive */
+@media (max-width: 768px) {
+  .grid-2, .grid-3, .grid-4 {
+    grid-template-columns: 1fr;
+  }
+  
+  .table-responsive {
+    font-size: 14px;
+  }
+}
+
+/* Animations */
+@keyframes fadeIn {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.fade-in {
+  animation: fadeIn 0.3s ease-out;
+}

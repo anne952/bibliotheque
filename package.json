@@ -1,0 +1,78 @@
+{
+  "name": "bibliotheque",
+  "private": true,
+  "version": "2.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "electron": "electron .",
+    "start": "concurrently \"npm run dev\" \"npm run electron\"",
+    "build": "vite build",
+    "build:web": "vite build",
+    "build:win": "npm run build:web && electron-builder --win nsis portable",
+    "dist": "npm run build:win"
+  },
+  "dependencies": {
+    "@emotion/react": "^11.14.0",
+    "@emotion/styled": "^11.14.1",
+    "@mui/icons-material": "^7.3.7",
+    "@mui/material": "^7.3.7",
+    "@mui/x-date-pickers": "^8.27.0",
+    "date-fns": "^4.1.0",
+    "electron-updater": "^6.8.3",
+    "exceljs": "^4.1.1",
+    "ionicons": "^8.0.13",
+    "jspdf": "^4.0.0",
+    "jspdf-autotable": "^5.0.7",
+    "lucide-react": "^0.563.0",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "react-icons": "^5.5.0",
+    "react-ionicons": "^4.2.1",
+    "react-router-dom": "^7.13.0",
+    "recharts": "^3.7.0",
+    "styled-components": "^6.3.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.1",
+    "@types/node": "^24.10.11",
+    "@types/react": "^19.2.5",
+    "@types/react-dom": "^19.2.3",
+    "@types/recharts": "^1.8.29",
+    "@vitejs/plugin-react": "^5.1.1",
+    "concurrently": "^9.2.1",
+    "electron": "^40.0.0",
+    "electron-builder": "^26.8.1",
+    "eslint": "^10.0.2",
+    "eslint-plugin-react-hooks": "^7.0.1",
+    "eslint-plugin-react-refresh": "^0.4.24",
+    "globals": "^16.5.0",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.46.4",
+    "vite": "^7.2.4"
+  },
+  "main": "electron/main.js",
+  "build": {
+    "appId": "com.vgr.bibliotheque",
+    "productName": "Bibliotheque VGR",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "dist/**/*",
+      "electron/**/*",
+      "src/assets/logo.png",
+      "package.json"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "icon": "src/assets/logo.png"
+    }
+  },
+  "overrides": {
+    "package-name": "version-corrigée"
+  }
+}
