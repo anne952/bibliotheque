@@ -128,6 +128,63 @@ const isInvalidDonationJournalTypeError = (error: unknown) => {
   return message.includes('journaltype') && message.includes('donation');
 };
 
+const isValidatedEntryDeleteError = (error: unknown) => {
+  if (!(error instanceof Error)) return false;
+  const message = error.message.toLowerCase();
+  return message.includes('deja valide') || message.includes('deja valid') || message.includes('validated');
+};
+
+const getLineAccountForWrite = (line: any) => {
+  return String(
+    line?.accountId ||
+    line?.account?.id ||
+    line?.accountCode ||
+    line?.account?.code ||
+    line?.account ||
+    ''
+  ).trim();
+};
+
+const toReversalPayload = (entry: any) => {
+  const lines = Array.isArray(entry?.lines) ? entry.lines : [];
+  const reversedLines = lines
+    .map((line: any) => {
+      const account = getLineAccountForWrite(line);
+      const debit = Number(line?.debit || 0);
+      const credit = Number(line?.credit || 0);
+      if (!account) return null;
+
+      return {
+        account,
+        debit: credit,
+        credit: debit,
+        description: String(line?.description || entry?.businessLabel || entry?.description || 'Contrepassation automatique')
+      };
+    })
+    .filter((line: any) => line !== null);
+
+  if (reversedLines.length < 2) {
+    throw new Error('Contrepassation impossible: lignes comptables insuffisantes.');
+  }
+
+  const sourceType = String(entry?.sync?.sourceType || entry?.sourceType || 'MANUAL').trim();
+  const sourceId = String(entry?.sync?.identifier || entry?.sourceId || entry?.id || '').trim();
+
+  return {
+    fiscalYearId: entry?.fiscalYearId || entry?.fiscalYear?.id || null,
+    date: formatDateISO(entry?.date || new Date().toISOString().slice(0, 10)),
+    journalType: String(entry?.journalType || 'GENERAL').toUpperCase(),
+    businessLabel: `CONTREPASSATION - ${String(entry?.businessLabel || entry?.description || '').trim()}`.trim(),
+    description: `CONTREPASSATION - ${String(entry?.businessLabel || entry?.description || '').trim()}`.trim(),
+    pieceNumber: entry?.pieceNumber || null,
+    sync: {
+      sourceType: `${sourceType}_REVERSAL`,
+      identifier: sourceId
+    },
+    lines: reversedLines
+  };
+};
+
 const resolveFirstAvailableAccount = async (candidates: string[], fiscalYearId?: string) => {
   console.log('[resolveFirstAvailableAccount] Trying candidates:', candidates);
   
@@ -426,17 +483,67 @@ export const journalComptableService = {
   },
 
   async supprimerEcriture(id: string) {
-    await withFallback(
-      async () =>
-        apiClient.request(`/accounting/entries/${id}`, {
-          method: 'DELETE'
-        }),
-      async () =>
-        apiClient.request(`/comptabilite/entries/${id}`, {
-          method: 'DELETE'
-        }),
-      'supprimerEcriture'
-    );
+    try {
+      await withFallback(
+        async () =>
+          apiClient.request(`/accounting/entries/${id}`, {
+            method: 'DELETE'
+          }),
+        async () =>
+          apiClient.request(`/comptabilite/entries/${id}`, {
+            method: 'DELETE'
+          }),
+        'supprimerEcriture'
+      );
+
+      return { mode: 'deleted' as const };
+    } catch (error) {
+      if (!isValidatedEntryDeleteError(error)) {
+        throw error;
+      }
+
+      const entry = await withFallback(
+        async () => apiClient.request(`/accounting/entries/${id}`),
+        async () => apiClient.request(`/comptabilite/entries/${id}`),
+        'chargerEcriturePourContrepassation'
+      );
+
+      const reversalPayload = toReversalPayload(entry);
+      const reversed = await withFallback<any>(
+        async () =>
+          apiClient.request('/accounting/entries', {
+            method: 'POST',
+            data: reversalPayload
+          }),
+        async () =>
+          apiClient.request('/comptabilite/entries', {
+            method: 'POST',
+            data: reversalPayload
+          }),
+        'creerContrepassation'
+      );
+
+      try {
+        await withFallback(
+          async () =>
+            apiClient.request(`/accounting/entries/${reversed?.id}/validate`, {
+              method: 'PUT'
+            }),
+          async () =>
+            apiClient.request(`/comptabilite/entries/${reversed?.id}/validate`, {
+              method: 'PUT'
+            }),
+          'validerContrepassation'
+        );
+      } catch {
+        // Keep reversal even if validation step fails.
+      }
+
+      return {
+        mode: 'reversed' as const,
+        reversedId: String(reversed?.id || '')
+      };
+    }
   },
 
   async validerEcriture(id: string) {

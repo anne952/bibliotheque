@@ -1,7 +1,9 @@
 {
   "name": "bibliotheque",
   "private": true,
-  "version": "2.0.0",
+  "version": "2.2.3",
+  "description": "Application desktop de gestion de bibliotheque et comptabilite.",
+  "author": "VGR",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -9,7 +11,8 @@
     "start": "concurrently \"npm run dev\" \"npm run electron\"",
     "build": "vite build",
     "build:web": "vite build",
-    "build:win": "npm run build:web && electron-builder --win nsis portable",
+    "build:win": "npm run build:web && electron-builder --win nsis portable --publish never",
+    "release:win": "npm run build:web && electron-builder --win nsis --publish always",
     "dist": "npm run build:win"
   },
   "dependencies": {
@@ -40,6 +43,7 @@
     "@types/react-dom": "^19.2.3",
     "@types/recharts": "^1.8.29",
     "@vitejs/plugin-react": "^5.1.1",
+    "browserify-css": "^0.12.0",
     "concurrently": "^9.2.1",
     "electron": "^40.0.0",
     "electron-builder": "^26.8.1",
@@ -70,7 +74,15 @@
         "portable"
       ],
       "icon": "src/assets/logo.png"
-    }
+    },
+    "publish": [
+      {
+        "provider": "github",
+        "owner": "anne952",
+        "repo": "bibliotheque-logiciel-desktop",
+        "releaseType": "release"
+      }
+    ]
   },
   "overrides": {
     "package-name": "version-corrigée"

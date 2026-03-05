@@ -52,15 +52,70 @@ const createTransactionWithRetry = async <T = any>(path: string, data: Record<st
   }
 };
 
-const isoDate = (value?: string) => {
-  if (!value) return new Date().toISOString().slice(0, 10);
-  if (/^\d{4}-\d{2}-\d{2}$/.test(value)) return value;
-  if (/^\d{2}\/\d{2}\/\d{4}$/.test(value)) {
-    const [d, m, y] = value.split('/');
-    return `${y}-${m}-${d}`;
+const todayIso = () => new Date().toISOString().slice(0, 10);
+
+const isValidIsoDateParts = (year: string, month: string, day: string) => {
+  const y = Number(year);
+  const m = Number(month);
+  const d = Number(day);
+  if (!Number.isInteger(y) || !Number.isInteger(m) || !Number.isInteger(d)) return false;
+  if (m < 1 || m > 12 || d < 1 || d > 31) return false;
+
+  const check = new Date(Date.UTC(y, m - 1, d));
+  return (
+    check.getUTCFullYear() === y &&
+    check.getUTCMonth() === m - 1 &&
+    check.getUTCDate() === d
+  );
+};
+
+const toIsoDateOrToday = (value?: string) => {
+  if (!value) return todayIso();
+  const text = String(value).trim();
+  if (!text) return todayIso();
+
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    return isValidIsoDateParts(y, m, d) ? `${y}-${m}-${d}` : todayIso();
   }
-  const date = new Date(value);
-  return Number.isNaN(date.getTime()) ? new Date().toISOString().slice(0, 10) : date.toISOString().slice(0, 10);
+
+  const frMatch = text.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+  if (frMatch) {
+    const [, d, m, y] = frMatch;
+    return isValidIsoDateParts(y, m, d) ? `${y}-${m}-${d}` : todayIso();
+  }
+
+  const date = new Date(text);
+  return Number.isNaN(date.getTime()) ? todayIso() : date.toISOString().slice(0, 10);
+};
+
+const toIsoDateForApi = (value: unknown, fieldLabel: string) => {
+  if (value === undefined || value === null || String(value).trim() === '') {
+    return todayIso();
+  }
+
+  const text = String(value).trim();
+  const isoMatch = text.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (isoMatch) {
+    const [, y, m, d] = isoMatch;
+    if (isValidIsoDateParts(y, m, d)) return `${y}-${m}-${d}`;
+    throw new Error(`Date invalide pour ${fieldLabel}: ${text}`);
+  }
+
+  const frMatch = text.match(/^(\d{2})[\/-](\d{2})[\/-](\d{4})$/);
+  if (frMatch) {
+    const [, d, m, y] = frMatch;
+    if (isValidIsoDateParts(y, m, d)) return `${y}-${m}-${d}`;
+    throw new Error(`Date invalide pour ${fieldLabel}: ${text}`);
+  }
+
+  const date = new Date(text);
+  if (Number.isNaN(date.getTime())) {
+    throw new Error(`Date invalide pour ${fieldLabel}: ${text}`);
+  }
+
+  return date.toISOString().slice(0, 10);
 };
 
 const withMeta = <T extends object>(item: T, backendId: string, source: string) => ({
@@ -128,6 +183,197 @@ const fetchAllDonations = async () => {
   }
 
   return [];
+};
+
+const collectDonationAccountingEntryIdsFromAudit = (auditPayload: any): string[] => {
+  const accounting = auditPayload?.sync?.accounting || auditPayload?.accounting || {};
+  const candidates = [
+    accounting?.entryId,
+    accounting?.journalEntryId,
+    accounting?.id,
+    accounting?.entry?.id
+  ];
+
+  const grouped = [
+    ...(Array.isArray(accounting?.entries) ? accounting.entries : []),
+    ...(Array.isArray(accounting?.items) ? accounting.items : [])
+  ];
+
+  grouped.forEach((item: any) => {
+    candidates.push(item?.entryId, item?.journalEntryId, item?.id, item?.entry?.id);
+  });
+
+  return Array.from(
+    new Set(
+      candidates
+        .map((value) => String(value || '').trim())
+        .filter((value) => value.length > 0)
+    )
+  );
+};
+
+const sourceIdsMatch = (entrySourceId: string, sourceId: string) => {
+  const left = String(entrySourceId || '').trim().toLowerCase();
+  const right = String(sourceId || '').trim().toLowerCase();
+  if (!left || !right) return false;
+  if (left === right) return true;
+
+  // Some backends serialize sync identifiers with prefixes/suffixes (ex: PURCHASE:<id>).
+  if (left.includes(right) || right.includes(left)) return true;
+
+  const leftParts = left.split(/[^a-z0-9-]+/).filter(Boolean);
+  const rightParts = right.split(/[^a-z0-9-]+/).filter(Boolean);
+  return leftParts.some((part) => part === right) || rightParts.some((part) => part === left);
+};
+
+const isEntryLinkedToSource = (entry: any, sourceId: string, sourceTypeMatchers: string[]) => {
+  const sourceType = String(entry?.sync?.sourceType || entry?.sourceType || '').toUpperCase();
+  const entrySourceId = String(entry?.sync?.identifier || entry?.sourceId || '').trim();
+  const sourceTypeMatches = sourceTypeMatchers.some((matcher) => sourceType.includes(matcher));
+  return sourceTypeMatches && sourceIdsMatch(entrySourceId, sourceId);
+};
+
+const extractEntriesFromPayload = (payload: any) => {
+  if (Array.isArray(payload)) return payload;
+  if (!payload || typeof payload !== 'object') return [] as any[];
+  if (Array.isArray(payload.items)) return payload.items;
+  if (Array.isArray(payload.data)) return payload.data;
+  if (Array.isArray(payload.entries)) return payload.entries;
+  return [] as any[];
+};
+
+const deleteAccountingEntryById = async (entryId: string) => {
+  const isValidatedEntryDeleteError = (error: unknown) => {
+    if (!(error instanceof Error)) return false;
+    const message = error.message.toLowerCase();
+    return message.includes('deja valide') || message.includes('deja valid') || message.includes('validated');
+  };
+
+  const getLineAccountForWrite = (line: any) => {
+    return String(
+      line?.accountId ||
+      line?.account?.id ||
+      line?.accountCode ||
+      line?.account?.code ||
+      line?.account ||
+      ''
+    ).trim();
+  };
+
+  const toReversalPayload = (entry: any) => {
+    const lines = Array.isArray(entry?.lines) ? entry.lines : [];
+    const reversedLines = lines
+      .map((line: any) => {
+        const account = getLineAccountForWrite(line);
+        const debit = Number(line?.debit || 0);
+        const credit = Number(line?.credit || 0);
+        if (!account) return null;
+
+        return {
+          account,
+          debit: credit,
+          credit: debit,
+          description: String(line?.description || entry?.businessLabel || entry?.description || 'Contrepassation automatique')
+        };
+      })
+      .filter((line: any) => line !== null);
+
+    if (reversedLines.length < 2) {
+      throw new Error('Contrepassation impossible: lignes comptables insuffisantes.');
+    }
+
+    const sourceType = String(entry?.sync?.sourceType || entry?.sourceType || 'MANUAL').trim();
+    const sourceId = String(entry?.sync?.identifier || entry?.sourceId || entry?.id || '').trim();
+
+    return {
+      fiscalYearId: entry?.fiscalYearId || entry?.fiscalYear?.id || null,
+      date: toIsoDateForApi(entry?.date || new Date().toISOString().slice(0, 10), 'date de contrepassation'),
+      journalType: String(entry?.journalType || 'GENERAL').toUpperCase(),
+      businessLabel: `CONTREPASSATION - ${String(entry?.businessLabel || entry?.description || '').trim()}`.trim(),
+      description: `CONTREPASSATION - ${String(entry?.businessLabel || entry?.description || '').trim()}`.trim(),
+      pieceNumber: entry?.pieceNumber || null,
+      sync: {
+        sourceType: `${sourceType}_REVERSAL`,
+        identifier: sourceId
+      },
+      lines: reversedLines
+    };
+  };
+
+  try {
+    await requestRender(`/accounting/entries/${entryId}`, { method: 'DELETE' });
+    return;
+  } catch (primaryError) {
+    try {
+      await requestRender(`/comptabilite/entries/${entryId}`, { method: 'DELETE' });
+      return;
+    } catch (fallbackError) {
+      const finalError = fallbackError instanceof Error ? fallbackError : primaryError;
+      if (!isValidatedEntryDeleteError(finalError)) {
+        throw finalError;
+      }
+
+      const entry = await requestRender<any>(`/accounting/entries/${entryId}`)
+        .catch(async () => requestRender<any>(`/comptabilite/entries/${entryId}`));
+
+      const reversalPayload = toReversalPayload(entry);
+      const reversed = await requestRender<any>('/accounting/entries', {
+        method: 'POST',
+        data: reversalPayload
+      }).catch(async () => requestRender<any>('/comptabilite/entries', {
+        method: 'POST',
+        data: reversalPayload
+      }));
+
+      if (reversed?.id) {
+        await requestRender(`/accounting/entries/${reversed.id}/validate`, {
+          method: 'PUT'
+        }).catch(async () => requestRender(`/comptabilite/entries/${reversed.id}/validate`, {
+          method: 'PUT'
+        })).catch(() => undefined);
+      }
+    }
+  }
+};
+
+const cleanupAccountingForDeletedSource = async (
+  sourceId: string,
+  sourceTypeMatchers: string[],
+  donationAuditId?: string
+) => {
+  let entryIds: string[] = [];
+
+  if (donationAuditId) {
+    try {
+      const auditPayload = await requestRender<any>(`/transactions/donation/${donationAuditId}/audit`);
+      entryIds = collectDonationAccountingEntryIdsFromAudit(auditPayload);
+    } catch {
+      // Best effort: audit endpoint may not be available on all deployments.
+    }
+  }
+
+  if (entryIds.length === 0) {
+    try {
+      const entries = await requestRender<any>('/accounting/entries')
+        .catch(async () => requestRender<any>('/comptabilite/entries'));
+      const list = extractEntriesFromPayload(entries);
+
+      entryIds = list
+        .filter((entry: any) => isEntryLinkedToSource(entry, sourceId, sourceTypeMatchers))
+        .map((entry: any) => String(entry?.id || '').trim())
+        .filter((id: string) => id.length > 0);
+    } catch {
+      // Best effort only.
+    }
+  }
+
+  if (entryIds.length === 0) {
+    return;
+  }
+
+  for (const entryId of Array.from(new Set(entryIds))) {
+    await deleteAccountingEntryById(entryId);
+  }
 };
 
 const fetchAllMaterials = async () => {
@@ -240,13 +486,13 @@ export const libraryService = {
           id: String(loan.id),
           nom: person.lastName || person.nom || '',
           prenom: person.firstName || person.prenom || '',
-          dateEmprunt: isoDate(loan.createdAt || loan.loanDate || loan.date),
+          dateEmprunt: toIsoDateOrToday(loan.loanDate || loan.borrowDate || loan.date || loan.createdAt),
           telephone: person.phone || '',
           email: person.email || '',
           livres,
           dureeEmprunt: 14,
           egliseProvenance: person.church || '',
-          dateRetour: isoDate(loan.expectedReturnAt || loan.returnDate),
+          dateRetour: toIsoDateOrToday(loan.expectedReturnAt || loan.returnDate),
           renouvele: Boolean(loan.renewed)
         };
 
@@ -269,7 +515,7 @@ export const libraryService = {
         egliseProvenance: person.church || '',
         telephone: person.phone || '',
         email: person.email || '',
-        dateVisite: isoDate(person.createdAt || person.updatedAt)
+        dateVisite: toIsoDateOrToday(person.createdAt || person.updatedAt)
       }, String(person.id), 'persons')
     );
 
@@ -287,7 +533,7 @@ export const libraryService = {
           prenom: person.firstName || '',
           adresse: person.address || '',
           montant: Number(sale.totalAmount || sale.amount || 0),
-          dateVente: isoDate(sale.saleDate || sale.createdAt || sale.date)
+          dateVente: toIsoDateOrToday(sale.saleDate || sale.createdAt || sale.date)
         };
 
         return withMeta(mapped, String(sale.id), 'sale');
@@ -301,7 +547,7 @@ export const libraryService = {
           id: String(purchase.id),
           intitule: item0?.material?.name || purchase.notes || purchase.description || 'Achat',
           montant: Number(purchase.totalAmount || purchase.amount || purchase.unitPrice || 0),
-          dateAchat: isoDate(purchase.purchaseDate || purchase.createdAt || purchase.date),
+          dateAchat: toIsoDateOrToday(purchase.purchaseDate || purchase.createdAt || purchase.date),
           fournisseur: `${person.lastName || ''} ${person.firstName || ''}`.trim() || String(purchase.reference || '')
         };
         return withMeta(mapped, String(purchase.id), 'purchase');
@@ -314,7 +560,7 @@ export const libraryService = {
           id: String(item.id || ''),
           intitule: String(item.intitule || item.description || item.label || 'Achat'),
           montant: Number(item.montant || item.amount || 0),
-          dateAchat: isoDate(item.dateAchat || item.date || report.date),
+          dateAchat: toIsoDateOrToday(item.dateAchat || item.date || report.date),
           fournisseur: String(item.fournisseur || item.reference || '')
         }, String(item.id || ''), 'purchase')
       )
@@ -351,7 +597,7 @@ export const libraryService = {
         paymentMethod: String(item?.paymentMethod || item?.mode || 'espece').toLowerCase(),
         description: item?.description || '',
         institution: item?.institution || '',
-        date: isoDate(dateRaw),
+        date: toIsoDateOrToday(dateRaw),
         items: Array.isArray(item?.items) ? item.items : []
       };
       return mapped;
@@ -392,7 +638,7 @@ export const libraryService = {
         type: item.type,
         montant: Number(item.montant || 0),
         mode: item.mode,
-        dateDon: isoDate(item.dateDon || item.date || report.date),
+        dateDon: toIsoDateOrToday(item.dateDon || item.date || report.date),
         description: item.description || ''
       }, String(item.id || ''), 'donation'))
     );
@@ -404,7 +650,7 @@ export const libraryService = {
         materiel: item.materiel || '',
         quantite: Number(item.quantite || 0),
         institutionDestinaire: item.institutionDestinaire || item.institution || '',
-        dateDon: isoDate(item.dateDon || item.date || report.date),
+        dateDon: toIsoDateOrToday(item.dateDon || item.date || report.date),
         description: item.description || ''
       }, String(item.id || ''), 'donation'))
     );
@@ -416,7 +662,16 @@ export const libraryService = {
       ? [...donsMaterielFromApi, ...donsMaterielFromReports]
       : donsMaterielFromReports;
 
-    const dedupeById = <T extends { id: string }>(arr: T[]) => Array.from(new Map(arr.map((x) => [x.id, x])).values());
+    const dedupeById = <T extends { id: string }>(arr: T[]) => {
+      const map = new Map<string, T>();
+      // Keep first occurrence to preserve canonical transaction rows loaded first.
+      arr.forEach((item) => {
+        if (!map.has(item.id)) {
+          map.set(item.id, item);
+        }
+      });
+      return Array.from(map.values());
+    };
 
     return {
       emprunts: dedupeById(emprunts),
@@ -463,7 +718,7 @@ export const libraryService = {
       direction: 'IN',
       amount: Number(item.montant || 0),
       paymentMethod: item.mode,
-      donationDate: isoDate(item.dateDon),
+      donationDate: toIsoDateForApi(item.dateDon, 'date du don'),
       description: item.description || ''
     };
 
@@ -494,7 +749,7 @@ export const libraryService = {
       donorName: item.institutionDestinaire || 'Institution',
       donorType: 'moral',
       donationKind: 'MATERIAL',
-      donationDate: isoDate(item.dateDon),
+      donationDate: toIsoDateForApi(item.dateDon, 'date du don'),
       description: item.description || item.materiel,
       institution: item.institutionDestinaire || null,
       items: [{ materialId: material.id, quantity: Number(item.quantite || 1) }]
@@ -531,7 +786,7 @@ export const libraryService = {
         unitPrice: Number(item.montant || 0),
         personId: person.id,
         paymentMethod: 'cash',
-        saleDate: isoDate(item.dateVente)
+        saleDate: toIsoDateForApi(item.dateVente, 'date de vente')
       });
       createdSales.push(sale);
     }
@@ -586,7 +841,7 @@ export const libraryService = {
     const payload: Record<string, unknown> = {
       quantity: 1,
       unitPrice: Number(item.montant || 0),
-      purchaseDate: isoDate(item.dateAchat),
+      purchaseDate: toIsoDateForApi(item.dateAchat, 'date d\'achat'),
       reference: item.fournisseur || null,
       notes: item.intitule || null
     };
@@ -636,15 +891,45 @@ export const libraryService = {
       throw new Error('Aucun livre API trouve pour cet emprunt');
     }
 
-    const created = await requestRender<any>('/transactions/loan', {
-      method: 'POST',
-      data: {
-        personId: person.id,
-        expectedReturnAt: isoDate(item.dateRetour),
-        notes: item.renouvele ? 'Renouvele' : '',
-        items
+    const loanPayload = {
+      personId: person.id,
+      expectedReturnAt: toIsoDateForApi(item.dateRetour, 'date de retour'),
+      notes: item.renouvele ? 'Renouvele' : '',
+      items,
+      // Compatibilite descendante: certains backends acceptent loanDate/borrowDate,
+      // d'autres ignorent ces champs. On tente sans casser les anciennes versions.
+      loanDate: toIsoDateForApi(item.dateEmprunt, 'date d\'emprunt'),
+      borrowDate: toIsoDateForApi(item.dateEmprunt, 'date d\'emprunt')
+    };
+
+    let created;
+    try {
+      created = await requestRender<any>('/transactions/loan', {
+        method: 'POST',
+        data: loanPayload
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message.toLowerCase() : '';
+      const strictSchemaError =
+        message.includes('unrecognized') ||
+        message.includes('unknown key') ||
+        message.includes('loanDate'.toLowerCase()) ||
+        message.includes('borrowDate'.toLowerCase());
+
+      if (!strictSchemaError) {
+        throw error;
       }
-    });
+
+      created = await requestRender<any>('/transactions/loan', {
+        method: 'POST',
+        data: {
+          personId: person.id,
+          expectedReturnAt: toIsoDateForApi(item.dateRetour, 'date de retour'),
+          notes: item.renouvele ? 'Renouvele' : '',
+          items
+        }
+      });
+    }
 
     return withMeta({ ...item, id: String(created.id) }, String(created.id), 'loan');
   },
@@ -661,7 +946,7 @@ export const libraryService = {
       await requestRender(`/transactions/loan/${backendId}`, {
         method: 'PUT',
         data: {
-          expectedReturnAt: isoDate(item.dateRetour),
+          expectedReturnAt: toIsoDateForApi(item.dateRetour, 'date de retour'),
           notes: item.renouvele ? 'Renouvele' : ''
         }
       });
@@ -672,7 +957,7 @@ export const libraryService = {
       await requestRender(`/transactions/sale/${backendId}`, {
         method: 'PUT',
         data: {
-          saleDate: isoDate(item.dateVente),
+          saleDate: toIsoDateForApi(item.dateVente, 'date de vente'),
           unitPrice: Number(item.montant || 0)
         }
       });
@@ -683,9 +968,9 @@ export const libraryService = {
       await requestRender(`/transactions/purchase/${backendId}`, {
         method: 'PUT',
         data: {
-          purchaseDate: isoDate(item.dateAchat),
+          purchaseDate: toIsoDateForApi(item.dateAchat, 'date d\'achat'),
           unitPrice: Number(item.montant || 0),
-          notes: item.fournisseur || null
+          notes: item.intitule || null
         }
       });
       return withMeta(item, backendId, 'purchase');
@@ -699,7 +984,7 @@ export const libraryService = {
           donorType: item.type,
           amount: Number(item.montant || 0),
           paymentMethod: item.mode,
-          donationDate: isoDate(item.dateDon),
+          donationDate: toIsoDateForApi(item.dateDon, 'date du don'),
           description: item.description || ''
         }
       });
@@ -712,7 +997,7 @@ export const libraryService = {
         data: {
           donorName: item.institutionDestinaire || 'Institution',
           donorType: 'moral',
-          donationDate: isoDate(item.dateDon),
+          donationDate: toIsoDateForApi(item.dateDon, 'date du don'),
           description: item.description || item.materiel || '',
           institution: item.institutionDestinaire || null
         }
@@ -744,11 +1029,25 @@ export const libraryService = {
 
     if (tab === 'achat') {
       await requestRender(`/transactions/purchase/${backendId}`, { method: 'DELETE' });
+
+      try {
+        await cleanupAccountingForDeletedSource(backendId, ['PURCHASE', 'ACHAT']);
+      } catch {
+        // La suppression metier est deja faite. Le nettoyage comptable reste best effort.
+      }
+
       return;
     }
 
     if (tab === 'dons-financier' || tab === 'dons-materiel') {
       await requestRender(`/transactions/donation/${backendId}`, { method: 'DELETE' });
+
+      try {
+        await cleanupAccountingForDeletedSource(backendId, ['DONATION'], backendId);
+      } catch {
+        // La suppression du don est deja faite. Le nettoyage comptable reste best effort.
+      }
+
       return;
     }
 

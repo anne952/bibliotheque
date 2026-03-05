@@ -6,13 +6,33 @@
 export const withFallback = async <T>(
   primary: () => Promise<T>,
   fallback: () => Promise<T>,
-  context: string
+  context: string,
+  timeoutMs = 12000
 ): Promise<T> => {
+  const withTimeout = async (request: () => Promise<T>, label: 'primary' | 'fallback') => {
+    let timeoutHandle: ReturnType<typeof setTimeout> | null = null;
+
+    try {
+      return await Promise.race<T>([
+        request(),
+        new Promise<T>((_, reject) => {
+          timeoutHandle = setTimeout(() => {
+            reject(new Error(`${context}: ${label} timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
+        })
+      ]);
+    } finally {
+      if (timeoutHandle) {
+        clearTimeout(timeoutHandle);
+      }
+    }
+  };
+
   try {
-    return await primary();
+    return await withTimeout(primary, 'primary');
   } catch (error) {
     console.warn(`${context}: Primary endpoint failed, trying fallback:`, error);
-    return fallback();
+    return withTimeout(fallback, 'fallback');
   }
 };
 

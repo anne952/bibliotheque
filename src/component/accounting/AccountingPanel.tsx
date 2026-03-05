@@ -195,11 +195,21 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
       }
 
       try {
-        await journalComptableService.supprimerEcriture(target.id);
-        const all = await dataSyncService.getJournalEntries();
-        const nextAll = all.filter((entry) => entry.id !== target.id);
-        dataSyncService.setJournalEntries(nextAll);
-        setJournalEntries((prev) => prev.filter((_, i) => i !== index));
+        const deletionResult = await journalComptableService.supprimerEcriture(target.id);
+
+        if (deletionResult?.mode === 'reversed') {
+          setApiError('Ecriture deja validee: suppression impossible. Une contrepassation a ete creee automatiquement.');
+          const all = await dataSyncService.getJournalEntries(true);
+          const data = (selectedPeriod && /^\d{1,2}\/\d{4}$/.test(selectedPeriod))
+            ? all.filter((entry) => entry.periode === selectedPeriod)
+            : all;
+          setJournalEntries(deletionService.applyRestorePosition('comptabilite-journal', data));
+        } else {
+          const all = await dataSyncService.getJournalEntries();
+          const nextAll = all.filter((entry) => entry.id !== target.id);
+          dataSyncService.setJournalEntries(nextAll);
+          setJournalEntries((prev) => prev.filter((_, i) => i !== index));
+        }
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Suppression impossible');
         return;

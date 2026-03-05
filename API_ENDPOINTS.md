@@ -166,9 +166,13 @@
   - Description: `description`, `details`
 - Regles:
   - Chaque ligne doit contenir au moins `name` et un `type` valide (`BOOK`, `SD_CARD`, `TABLET`, `PHOTOCOPIER`, `PRINTER`, `CHAIR`, `OTHER`) ou utiliser `defaultType`.
+  - Delimiteurs supportes pour `pastedData`: tabulation, `;`, `,`.
+  - Priorite payload: si `rows` est present, le backend ignore `pastedData`.
   - Doublons pris en charge en mode upsert/update: si `reference` ou `serialNumber` existe deja, le materiel existant est mis a jour au lieu de provoquer une erreur.
+  - En cas de conflit ambigu (`reference` et `serialNumber` pointant vers 2 materiels differents), la ligne est ignoree et retournee dans `lineErrors`.
   - Si un materiel est soft-delete et matche par `reference`/`serialNumber`, il est reactive (`deletedAt=null`).
-- Response: `{ receivedRows, jsonRows, createdCount, updatedCount, processedCount, createdMaterials }`
+- Traitement: par lots (batch) avec succes partiel (pas de rollback global).
+- Response: `{ receivedRows, jsonRows, createdCount, updatedCount, failedCount, errors, lineErrors, processedCount, createdMaterials }`
 
 ### Update Material
 - **PUT** `/materials/:id`
@@ -215,14 +219,30 @@
 
 ### Create Purchase
 - **POST** `/transactions/purchase`
-- Body: `{ quantity, unitPrice, paymentMethod?, paymentStatus?, supplierId?, invoiceNumber?, notes?, reference? }`
+- Body: `{ quantity, unitPrice, itemName?, paymentMethod?, paymentStatus?, supplierId?, invoiceNumber?, notes?, reference?, purchaseDate? }`
+- `itemName` (optionnel): libelle metier pour la comptabilite (ex: `livre`, `meuble`)
+- `purchaseDate` (optionnel): date explicite de l'achat (accepte une date anterieure si un exercice comptable ouvert couvre cette date)
 - Creates Purchase record + synchronized accounting journal entry (source `PURCHASE`)
 - Response: Created purchase object
+- Exemple:
+```json
+{
+  "quantity": 12,
+  "unitPrice": 2500,
+  "itemName": "livre",
+  "paymentMethod": "CASH",
+  "paymentStatus": "PAID",
+  "invoiceNumber": "ACH-2026-001",
+  "notes": "Achat de stock lecture"
+}
+```
 
 ### Update Purchase
 - **PUT** `/transactions/purchase/:id`
 - Body: `{ supplierId?, paymentMethod?, paymentStatus?, invoiceNumber?, notes?, purchaseDate?, unitPrice?/montant? }`
 - Updates purchase metadata and optional item pricing
+- Si `purchaseDate` est fourni et qu'une ecriture comptable auto existe (`source=PURCHASE`), la date comptable est resynchronisee automatiquement
+- Validation metier: la date cible doit appartenir a un exercice comptable ouvert pour conserver la synchronisation
 - Response: Updated purchase object
 
 ### Delete Purchase
@@ -232,14 +252,31 @@
 
 ### Create Sale
 - **POST** `/transactions/sale`
-- Body: `{ materialId, quantity, unitPrice, personId?, paymentMethod?, paymentStatus?, invoiceNumber?, notes?, reference? }`
-- Creates Sale record + StockMovement (SALE_OUT) + updates Material stock + synchronized accounting journal entry (source `SALE`)
+- Body: `{ materialId?, itemName?, quantity, unitPrice, personId?, paymentMethod?, paymentStatus?, invoiceNumber?, notes?, reference?, saleDate? }`
+- Rule: provide at least one of `materialId` or `itemName`
+- `saleDate` (optionnel): date explicite de la vente (accepte une date anterieure si un exercice comptable ouvert couvre cette date)
+- If `materialId` is provided: creates Sale + StockMovement (SALE_OUT) + updates Material stock + synchronized accounting journal entry (source `SALE`)
+- If `itemName` is provided without `materialId`: creates Sale (vente libre) with synchronized accounting journal entry, without stock movement
 - Response: Created sale object
+- Exemple vente libre (`itemName` sans `materialId`):
+```json
+{
+  "itemName": "meuble TV",
+  "quantity": 1,
+  "unitPrice": 75000,
+  "paymentMethod": "CASH",
+  "paymentStatus": "PAID",
+  "invoiceNumber": "VNT-2026-015",
+  "notes": "Vente directe exposition"
+}
+```
 
 ### Update Sale
 - **PUT** `/transactions/sale/:id`
 - Body: `{ personId?, paymentMethod?, paymentStatus?, invoiceNumber?, notes?, saleDate?, unitPrice?/montant? }`
 - Updates sale metadata and optional item pricing
+- Si `saleDate` est fourni: les `StockMovement` lies a la vente sont redates, et l'ecriture comptable auto (`source=SALE`) est resynchronisee si elle existe
+- Validation metier: la date cible doit appartenir a un exercice comptable ouvert pour conserver la synchronisation
 - Response: Updated sale object
 
 ### Delete Sale
@@ -286,10 +323,11 @@
 
 ### Create Donation
 - **POST** `/transactions/donation`
-- Body: `{ donorId?, donorName?, donorType?, donationKind, direction?, amount?, paymentMethod?, description?, institution?, items? }`
+- Body: `{ donorId?, donorName?, donorType?, donationKind, direction?, amount?, paymentMethod?, description?, institution?, items?, donationDate? }`
 - For material donations: requires items array
 - For material donations: direction is always forced to `OUT`
 - For financial donations: requires amount
+- `donationDate` (optionnel): date explicite du don (accepte une date anterieure si un exercice comptable ouvert couvre cette date pour les dons financiers entrants)
 - Financial donations (direction `IN`) create synchronized accounting journal entries (source `DONATION_FINANCIAL`, `journalType=DONATION`)
 - Response: Created donation object
 
@@ -297,6 +335,8 @@
 - **PUT** `/transactions/donation/:id`
 - Body: `{ donorId?, donorName?, donorType?, paymentMethod?, donationDate?, description?, institution?, amount? }`
 - Updates donation metadata
+- Si `donationDate` est fourni: les mouvements matieres lies au don sont redates; pour un don financier entrant, l'ecriture comptable auto (`source=DONATION_FINANCIAL`) est resynchronisee
+- Validation metier: la date cible doit appartenir a un exercice comptable ouvert quand une synchronisation comptable est attendue
 - Response: Updated donation object
 
 ### Audit Donation Sync
@@ -363,7 +403,11 @@
 
 ### Create Journal Entry
 - **POST** `/accounting/entries`
-- Body: `{ fiscalYearId, date, journalType, description, pieceNumber?, sourceType?, sourceId?, lines: [{ account, debit?, credit?, description? }] }`
+- Body: `{ fiscalYearId, date, journalType, businessLabel|description, pieceNumber?, sync?: { sourceType?, identifier? }, sourceType?, sourceId?, lines: [{ account, debit?, credit?, description? }] }`
+- Separation claire des donnees:
+  - `businessLabel` (ou `description`) = libelle metier de l'ecriture
+  - `sync.identifier` (ou `sourceId`) = identifiant technique de synchronisation
+  - `sync.sourceType` (ou `sourceType`) = type de source technique
 - **Status**: ✅ **Production Ready** (Testé Render: Entry FY 2026-00031 créée avec succès)
 - **Champ unifié `account`**: Accepte automatiquement soit un UUID soit un numéro de compte (ex: "57", "521")
   - Détection UUID: Si le format correspond à un UUID, recherche directe par ID
@@ -445,10 +489,13 @@
   - Source (optionnel): `sourceType`, `sourceId`
 - Regles:
   - Chaque ligne doit contenir une date, un libelle, un compte debit, un compte credit, un montant > 0.
+  - Delimiteurs supportes pour `pastedData`: tabulation, `;`, `,`.
+  - Priorite payload: si `rows` est present, le backend ignore `pastedData`.
   - Le backend cree automatiquement 2 lignes comptables par ligne importee (debit/credit, meme montant).
   - Doublons pris en charge en mode upsert/update: si une ecriture equivalente existe deja (meme date, journal, piece, description, source, comptes debit/credit et montant), elle est mise a jour.
-  - Une ecriture equivalente deja validee n'est pas modifiable: la ligne est refusee.
+  - Une ecriture equivalente deja validee n'est pas modifiable: la ligne est refusee et remontee dans `lineErrors`.
   - `fiscalYearId` doit exister et ne pas etre ferme.
+  - Traitement: par lots (batch) avec succes partiel (pas de rollback global).
 - Response:
 ```json
 {
@@ -464,6 +511,9 @@
   ],
   "createdCount": 1,
   "updatedCount": 0,
+  "failedCount": 0,
+  "errors": [],
+  "lineErrors": [],
   "processedCount": 1,
   "createdEntries": [
     {
@@ -478,11 +528,17 @@
 
 ### Update Journal Entry
 - **PUT** `/accounting/entries/:id`
-- Body: Any updatable fields from create payload (`fiscalYearId`, `date`, `journalType`, `description`, `pieceNumber`, `sourceType`, `sourceId`, `lines`)
+- Body: Any updatable fields from create payload (`fiscalYearId`, `date`, `journalType`, `businessLabel|description`, `pieceNumber`, `sync`, `sourceType`, `sourceId`, `lines`)
 - **Note**: Les lignes utilisent le champ unifié `account` (UUID ou numéro) - rétrocompatible avec `accountId` et `accountNumber`
 - Validation: Cannot update validated entries; if `lines` are provided, debit total must equal credit total and min 2 lines
 - **Contrepartie automatique**: **NON** sur cet endpoint (mêmes règles strictes que la création).
 - Response: Updated journal entry
+
+### Structure de reponse comptable (entries)
+- Les endpoints `GET/POST/PUT /accounting/entries...` exposent maintenant en plus:
+  - `businessLabel` (miroir de `description`)
+  - `sync: { sourceType, identifier }` (miroir de `sourceType/sourceId`)
+- Compatibilite conservee: `description`, `sourceType`, `sourceId` restent presentes.
 
 ### Validate Journal Entry
 - **PUT** `/accounting/entries/:id/validate`

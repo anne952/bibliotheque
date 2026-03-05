@@ -30,6 +30,8 @@ const BibliothequePage: React.FC = () => {
   const [achats, setAchats] = useState<Achat[]>([]);
   const [booksCatalog, setBooksCatalog] = useState<Array<{ id: string; titre: string; reference: string }>>([]);
 
+  const tabImpactsAccounting = (tab: TabType) => tab === 'vente' || tab === 'achat' || tab === 'dons-financier';
+
   React.useEffect(() => {
     const loadData = async () => {
       try {
@@ -259,6 +261,10 @@ const BibliothequePage: React.FC = () => {
             syncLibraryCache({ achats: next });
           }
           break;
+      }
+
+      if (tabImpactsAccounting(activeTab)) {
+        dataSyncService.invalidateAccountingCaches();
       }
     }
   };
@@ -542,6 +548,10 @@ const BibliothequePage: React.FC = () => {
           break;
         }
       }
+
+      if (tabImpactsAccounting(activeTab)) {
+        dataSyncService.invalidateAccountingCaches();
+      }
     }
 
     return { success: created.length, failed: errors.length, errors };
@@ -608,6 +618,10 @@ const BibliothequePage: React.FC = () => {
               syncLibraryCache({ achats: next });
             }
             break;
+        }
+
+        if (tabImpactsAccounting(activeTab)) {
+          dataSyncService.invalidateAccountingCaches();
         }
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Modification non synchronisee avec le serveur';
@@ -697,6 +711,10 @@ const BibliothequePage: React.FC = () => {
             syncLibraryCache({ achats: next });
           }
           break;
+      }
+
+      if (tabImpactsAccounting(activeTab)) {
+        dataSyncService.invalidateAccountingCaches();
       }
     }
 

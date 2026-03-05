@@ -107,5 +107,11 @@ export const dataSyncService = {
 
   setDonateurs(data: Donateurs) {
     cache.donateurs.data = data;
+  },
+
+  invalidateAccountingCaches() {
+    cache.journalEntries.data = null;
+    cache.caisseEntries.data = null;
+    cache.donateurs.data = null;
   }
 };
