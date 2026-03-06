@@ -522,8 +522,12 @@ export const libraryService = {
     const ventes = salesGroups.flatMap(({ person, data }) =>
       data.map((sale: any) => {
         const items = Array.isArray(sale.items) ? sale.items : [];
-        const titres = items.map((it: any) => it.material?.name || it.title || '');
-        const references = items.map((it: any) => it.material?.reference || it.reference || '');
+        const rawTitres = items.map((it: any) => it.material?.name || it.title || '').filter(Boolean);
+        const rawReferences = items.map((it: any) => it.material?.reference || it.reference || '').filter(Boolean);
+        const fallbackTitle = String(sale.itemName || sale.notes || '').trim();
+        const fallbackReference = String(sale.reference || '').trim();
+        const titres = rawTitres.length > 0 ? rawTitres : (fallbackTitle ? [fallbackTitle] : []);
+        const references = rawReferences.length > 0 ? rawReferences : (fallbackReference ? [fallbackReference] : []);
 
         const mapped = {
           id: String(sale.id),
@@ -545,7 +549,7 @@ export const libraryService = {
         const item0 = Array.isArray(purchase.items) ? purchase.items[0] : null;
         const mapped = {
           id: String(purchase.id),
-          intitule: item0?.material?.name || purchase.notes || purchase.description || 'Achat',
+          intitule: item0?.material?.name || purchase.itemName || purchase.notes || purchase.description || 'Achat',
           montant: Number(purchase.totalAmount || purchase.amount || purchase.unitPrice || 0),
           dateAchat: toIsoDateOrToday(purchase.purchaseDate || purchase.createdAt || purchase.date),
           fournisseur: `${person.lastName || ''} ${person.firstName || ''}`.trim() || String(purchase.reference || '')
@@ -770,33 +774,37 @@ export const libraryService = {
     });
 
     const createdSales: any[] = [];
-    const missingTitles: string[] = [];
     for (let i = 0; i < (item.titres || []).length; i += 1) {
       const title = item.titres[i];
       const reference = item.references?.[i];
       const material = await findMaterialByReference(reference, title);
-      if (!material?.id) {
-        missingTitles.push(String(title || '').trim());
-        continue;
-      }
-
-      const sale = await createTransactionWithRetry<any>('/transactions/sale', {
-        materialId: material.id,
+      const trimmedTitle = String(title || '').trim();
+      const salePayload: Record<string, unknown> = {
         quantity: 1,
         unitPrice: Number(item.montant || 0),
         personId: person.id,
         paymentMethod: 'cash',
         saleDate: toIsoDateForApi(item.dateVente, 'date de vente')
-      });
+      };
+
+      if (material?.id) {
+        salePayload.materialId = material.id;
+      } else if (trimmedTitle) {
+        // API contract allows free sale when itemName is provided without materialId.
+        salePayload.itemName = trimmedTitle;
+        if (reference) {
+          salePayload.reference = String(reference);
+        }
+      } else {
+        continue;
+      }
+
+      const sale = await createTransactionWithRetry<any>('/transactions/sale', salePayload);
       createdSales.push(sale);
     }
 
-    if (missingTitles.length > 0) {
-      throw new Error(`Livre(s) introuvable(s) pour la vente: ${missingTitles.join(', ')}`);
-    }
-
     if (createdSales.length === 0) {
-      throw new Error('Aucun materiel API trouve pour cette vente');
+      throw new Error('Aucun article valide trouve pour cette vente');
     }
 
     const firstSale = createdSales[0];
@@ -845,6 +853,10 @@ export const libraryService = {
       reference: item.fournisseur || null,
       notes: item.intitule || null
     };
+
+    if (item.intitule) {
+      payload.itemName = String(item.intitule).trim();
+    }
 
     if (material?.id) {
       payload.materialId = material.id;
