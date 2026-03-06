@@ -1,7 +1,7 @@
 {
   "name": "bibliotheque",
   "private": true,
-  "version": "2.2.3",
+  "version": "2.2.4",
   "description": "Application desktop de gestion de bibliotheque et comptabilite.",
   "author": "VGR",
   "type": "module",
