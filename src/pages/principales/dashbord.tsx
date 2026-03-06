@@ -4,53 +4,22 @@ import type{ DashboardProps, StatData, ChartData } from '../../types/dashboard';
 import DashboardHeader from '../../component/dashboardHeader';
 import StatCard from '../../component/startCard';
 import MonthlyChart from '../../component/monthlyChart';
-import { dashboardService } from '../../service/dashboardService';
+import { useDashboardStatsQuery, useMonthlyStatsQuery } from '../../hooks/queries/dashboardQueries';
 import '../principales/css/dashboard.css';
 
 const Dashboard: React.FC<DashboardProps> = ({ userName = "Monsieur" }) => {
-  const [statsData, setStatsData] = React.useState<StatData>({
+  const statsQuery = useDashboardStatsQuery();
+  const monthlyQuery = useMonthlyStatsQuery(12);
+  const statsData = (statsQuery.data ?? {
     visiteurs: 0,
     emprunts: 0,
     dons: 0,
     ventes: 0
-  });
-  const [chartData, setChartData] = React.useState<ChartData[]>([]);
-  const [loadingStats, setLoadingStats] = React.useState(true);
-  const [loadingChart, setLoadingChart] = React.useState(true);
-  const [error, setError] = React.useState('');
-
-  React.useEffect(() => {
-    const loadDashboard = async () => {
-      setError('');
-      setLoadingStats(true);
-      setLoadingChart(true);
-
-      const statsPromise = dashboardService
-        .getStats()
-        .then((stats) => setStatsData(stats))
-        .catch((err) => {
-          setError(err instanceof Error ? err.message : 'Erreur de chargement des cartes');
-        })
-        .finally(() => {
-          setLoadingStats(false);
-        });
-
-      const chartPromise = dashboardService
-        .getMonthlyStats(12)
-        .then((chart) => setChartData(chart))
-        .catch((err) => {
-          const message = err instanceof Error ? err.message : 'Erreur de chargement des statistiques mensuelles';
-          setError((prev) => prev || message);
-        })
-        .finally(() => {
-          setLoadingChart(false);
-        });
-
-      await Promise.allSettled([statsPromise, chartPromise]);
-    };
-
-    void loadDashboard();
-  }, []);
+  }) as StatData;
+  const chartData = (monthlyQuery.data ?? []) as ChartData[];
+  const loadingStats = statsQuery.isLoading;
+  const loadingChart = monthlyQuery.isLoading;
+  const error = (statsQuery.error as Error | null)?.message || (monthlyQuery.error as Error | null)?.message || '';
 
   return (
     <div className="dashboard-container">

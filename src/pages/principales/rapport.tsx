@@ -4,42 +4,27 @@ import { Container } from '@mui/material';
 import { useNavigate } from 'react-router-dom';
 import RapportsList from '../../component/rapport/RapportsList';
 import SearchBar from '../../component/SearchBar';
-import { reportService } from '../../service/reportService';
-import { dataSyncService } from '../../service/dataSyncService';
 import { deletionService, isDeletionBackendMissingError } from '../../service/deletionService';
+import { useDeleteReportMutation, useReportsQuery } from '../../hooks/queries/reportsQueries';
 import type { RapportJournalier } from '../../types/rapport';
 
-type ReportItem = Awaited<ReturnType<typeof reportService.getRecentReports>>[number];
+type ReportItem = RapportJournalier;
 
 const RapportPage: React.FC = () => {
   const navigate = useNavigate();
-  const [rapports, setRapports] = useState<ReportItem[]>([]);
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState('');
+  const reportsQuery = useReportsQuery();
+  const deleteReportMutation = useDeleteReportMutation();
+  const rapports = reportsQuery.data ?? [];
+  const loading = reportsQuery.isLoading;
+  const queryError = (reportsQuery.error as Error | null)?.message ?? '';
 
   React.useEffect(() => {
-    const loadReports = async () => {
-      try {
-        localStorage.removeItem('reports_deleted_local');
-        setLoading(true);
-        setApiError('');
-        const data = await dataSyncService.getReports7(true);
-        setRapports(deletionService.applyRestorePosition('rapport', data));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Erreur de chargement des rapports';
-        if (message.toLowerCase().includes('session expir')) {
-          navigate('/login', { replace: true });
-          return;
-        }
-        setApiError(message);
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadReports();
-  }, [navigate]);
+    if (queryError.toLowerCase().includes('session expir')) {
+      navigate('/login', { replace: true });
+    }
+  }, [navigate, queryError]);
 
   const handleDeleteRapport = async (id: string) => {
     setApiError('');
@@ -47,8 +32,7 @@ const RapportPage: React.FC = () => {
     const originalIndex = rapports.findIndex((rapport) => rapport.id === id);
 
     try {
-      await reportService.deleteReport(id);
-      setRapports((prev) => { const next = prev.filter((rapport) => rapport.id !== id); dataSyncService.setReports7(next); return next; });
+      await deleteReportMutation.mutateAsync(id);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Suppression du rapport impossible');
       return;
@@ -114,7 +98,7 @@ const RapportPage: React.FC = () => {
   return (
     <Container maxWidth="lg" sx={{ mt: 4, mb: 4 }}>
       {loading && <p>Chargement des rapports...</p>}
-      {apiError && <p>{apiError}</p>}
+      {(apiError || queryError) && <p>{apiError || queryError}</p>}
       <SearchBar
         value={searchQuery}
         onChange={setSearchQuery}

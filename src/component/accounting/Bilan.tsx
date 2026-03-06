@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { bilanService } from '../../service/accounting/bilanService';
+import { useMemo } from 'react';
+import { useBilanQuery } from '../../hooks/queries/accountingQueries';
 
 interface BilanProps {
   period: string | null;
@@ -36,26 +36,10 @@ const emptyBilan: BilanData = {
 };
 
 const Bilan = ({ period }: BilanProps) => {
-  const [bilanData, setBilanData] = useState<BilanData>(emptyBilan);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const loadBilan = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await bilanService.getBilan(period);
-        setBilanData(data as BilanData);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Chargement du bilan impossible');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadBilan();
-  }, [period]);
+  const bilanQuery = useBilanQuery(period);
+  const bilanData = (bilanQuery.data as BilanData) || emptyBilan;
+  const loading = bilanQuery.isLoading;
+  const error = (bilanQuery.error as Error | null)?.message ?? null;
 
   const totalActif = useMemo(
     () => [...bilanData.actif.immobilisations, ...bilanData.actif.stocks, ...bilanData.actif.tresorerie].reduce((sum, item) => sum + item.montant, 0),

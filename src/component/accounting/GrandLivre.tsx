@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useState } from 'react';
 import { FiEdit2, FiTrash2, FiChevronDown, FiChevronRight } from 'react-icons/fi';
-import { grandLivreService } from '../../service/accounting/grandLivreService';
+import { useGrandLivreQuery } from '../../hooks/queries/accountingQueries';
 
 interface GrandLivreOperation {
   date: string;
@@ -27,32 +27,18 @@ interface GrandLivreProps {
 
 const GrandLivre = ({ searchTerm, period }: GrandLivreProps) => {
   const [expandedAccounts, setExpandedAccounts] = useState<string[]>([]);
-  const [accounts, setAccounts] = useState<GrandLivreAccount[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const grandLivreQuery = useGrandLivreQuery(period);
+  const accounts = (grandLivreQuery.data as GrandLivreAccount[]) || [];
+  const loading = grandLivreQuery.isLoading;
+  const error = (grandLivreQuery.error as Error | null)?.message ?? null;
 
   useEffect(() => {
-    const loadGrandLivre = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await grandLivreService.getGrandLivre(period || undefined);
-        setAccounts(data as GrandLivreAccount[]);
-
-        const defaults = (data as GrandLivreAccount[])
-          .filter((acc) => ['5', '6', '7'].includes(acc.compte.charAt(0)))
-          .slice(0, 5)
-          .map((acc) => acc.compte);
-        setExpandedAccounts(defaults);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Chargement du grand livre impossible');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadGrandLivre();
-  }, [period]);
+    const defaults = accounts
+      .filter((acc) => ['5', '6', '7'].includes(acc.compte.charAt(0)))
+      .slice(0, 5)
+      .map((acc) => acc.compte);
+    setExpandedAccounts(defaults);
+  }, [accounts]);
 
   const term = searchTerm.trim().toLowerCase();
 

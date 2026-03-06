@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useMemo, useState } from 'react';
 import type { TabType, Emprunt, Visiteur, Vente, DonFinancier, DonMateriel, Achat } from '../../types/biblio';
 import { FiClipboard } from 'react-icons/fi';
 import Navbar from './navbar';
@@ -7,10 +7,16 @@ import DataTable from './DataTable';
 import ModalForm from './ModalForm';
 import SearchBar from '../SearchBar';
 import PasteImportModal from '../common/PasteImportModal';
-import { libraryService } from '../../service/libraryService';
-import { dataSyncService } from '../../service/dataSyncService';
 import { deletionService, isDeletionBackendMissingError } from '../../service/deletionService';
 import { normalizeImportKey, parseClipboardTable, parseImportBoolean, parseImportNumber } from '../../utils/pasteImport';
+import {
+  useCreateLibraryRecordMutation,
+  useDeleteLibraryRecordMutation,
+  useImportLibraryPasteMutation,
+  useLibraryBooksCatalogQuery,
+  useLibraryDataQuery,
+  useUpdateLibraryRecordMutation
+} from '../../hooks/queries/libraryQueries';
 import './css/BibliothequePage.css';
 
 const BibliothequePage: React.FC = () => {
@@ -19,60 +25,50 @@ const BibliothequePage: React.FC = () => {
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [isPasteModalOpen, setIsPasteModalOpen] = useState(false);
   const [editingItem, setEditingItem] = useState<any>(null);
-  const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState('');
 
-  const [emprunts, setEmprunts] = useState<Emprunt[]>([]);
-  const [visiteurs, setVisiteurs] = useState<Visiteur[]>([]);
-  const [ventes, setVentes] = useState<Vente[]>([]);
-  const [donsFinanciers, setDonsFinanciers] = useState<DonFinancier[]>([]);
-  const [donsMateriel, setDonsMateriel] = useState<DonMateriel[]>([]);
-  const [achats, setAchats] = useState<Achat[]>([]);
-  const [booksCatalog, setBooksCatalog] = useState<Array<{ id: string; titre: string; reference: string }>>([]);
+  const { data: libraryData, isLoading, error: libraryLoadError } = useLibraryDataQuery();
+  const { data: booksCatalog = [] } = useLibraryBooksCatalogQuery();
+  const createRecordMutation = useCreateLibraryRecordMutation();
+  const updateRecordMutation = useUpdateLibraryRecordMutation();
+  const deleteRecordMutation = useDeleteLibraryRecordMutation();
+  const importPasteMutation = useImportLibraryPasteMutation();
 
-  const tabImpactsAccounting = (tab: TabType) => tab === 'vente' || tab === 'achat' || tab === 'dons-financier';
-
-  React.useEffect(() => {
-    const loadData = async () => {
-      try {
-        setLoading(true);
-        setApiError('');
-        const data = await dataSyncService.getLibraryData(true);
-        const books = await libraryService.getBookCatalog();
-        const empruntsRestored = deletionService.applyRestorePosition('emprunt', data.emprunts as Emprunt[]);
-        const visiteursRestored = deletionService.applyRestorePosition('visite', data.visiteurs as Visiteur[]);
-        const ventesRestored = deletionService.applyRestorePosition('vente', data.ventes as Vente[]);
-        const donsFinanciersRestored = deletionService.applyRestorePosition('dons-financier', data.donsFinanciers as DonFinancier[]);
-        const donsMaterielRestored = deletionService.applyRestorePosition('dons-materiel', data.donsMateriel as DonMateriel[]);
-        const achatsRestored = deletionService.applyRestorePosition('achat', data.achats as Achat[]);
-
-        setEmprunts(empruntsRestored);
-        setVisiteurs(visiteursRestored);
-        setVentes(ventesRestored);
-        setDonsFinanciers(donsFinanciersRestored);
-        setDonsMateriel(donsMaterielRestored);
-        setAchats(achatsRestored);
-        setBooksCatalog(books);
-      } catch (error) {
-        setApiError(error instanceof Error ? error.message : 'Erreur de chargement');
-      } finally {
-        setLoading(false);
-      }
+  const restoredData = useMemo(() => {
+    const source = libraryData || {
+      emprunts: [],
+      visiteurs: [],
+      ventes: [],
+      donsFinanciers: [],
+      donsMateriel: [],
+      achats: []
     };
 
-    void loadData();
-  }, []);
+    return {
+      emprunts: deletionService.applyRestorePosition('emprunt', source.emprunts as Emprunt[]),
+      visiteurs: deletionService.applyRestorePosition('visite', source.visiteurs as Visiteur[]),
+      ventes: deletionService.applyRestorePosition('vente', source.ventes as Vente[]),
+      donsFinanciers: deletionService.applyRestorePosition('dons-financier', source.donsFinanciers as DonFinancier[]),
+      donsMateriel: deletionService.applyRestorePosition('dons-materiel', source.donsMateriel as DonMateriel[]),
+      achats: deletionService.applyRestorePosition('achat', source.achats as Achat[])
+    };
+  }, [libraryData]);
 
-  const syncLibraryCache = (overrides?: Partial<Record<string, any[]>>) => {
-    dataSyncService.setLibraryData({
-      emprunts: overrides?.emprunts ?? emprunts,
-      visiteurs: overrides?.visiteurs ?? visiteurs,
-      ventes: overrides?.ventes ?? ventes,
-      donsFinanciers: overrides?.donsFinanciers ?? donsFinanciers,
-      donsMateriel: overrides?.donsMateriel ?? donsMateriel,
-      achats: overrides?.achats ?? achats
-    } as any);
-  };
+  const emprunts = restoredData.emprunts;
+  const visiteurs = restoredData.visiteurs;
+  const ventes = restoredData.ventes;
+  const donsFinanciers = restoredData.donsFinanciers;
+  const donsMateriel = restoredData.donsMateriel;
+  const achats = restoredData.achats;
+
+  const loading =
+    isLoading ||
+    createRecordMutation.isPending ||
+    updateRecordMutation.isPending ||
+    deleteRecordMutation.isPending ||
+    importPasteMutation.isPending;
+
+  const effectiveError = apiError || (libraryLoadError instanceof Error ? libraryLoadError.message : '');
 
   const getCurrentData = () => {
     switch (activeTab) {
@@ -164,7 +160,7 @@ const BibliothequePage: React.FC = () => {
 
       try {
         setApiError('');
-        await libraryService.deleteRecord(activeTab, target);
+        await deleteRecordMutation.mutateAsync({ tab: activeTab, target });
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Suppression non synchronisee avec le serveur');
         return;
@@ -216,55 +212,6 @@ const BibliothequePage: React.FC = () => {
         } else {
           setApiError(error instanceof Error ? error.message : 'Journalisation de suppression impossible');
         }
-      }
-
-      switch (activeTab) {
-        case 'emprunt':
-          {
-            const next = emprunts.filter(item => item.id !== id);
-            setEmprunts(next);
-            syncLibraryCache({ emprunts: next });
-          }
-          break;
-        case 'visite':
-          {
-            const next = visiteurs.filter(item => item.id !== id);
-            setVisiteurs(next);
-            syncLibraryCache({ visiteurs: next });
-          }
-          break;
-        case 'vente':
-          {
-            const next = ventes.filter(item => item.id !== id);
-            setVentes(next);
-            syncLibraryCache({ ventes: next });
-          }
-          break;
-        case 'dons-financier':
-          {
-            const next = donsFinanciers.filter(item => item.id !== id);
-            setDonsFinanciers(next);
-            syncLibraryCache({ donsFinanciers: next });
-          }
-          break;
-        case 'dons-materiel':
-          {
-            const next = donsMateriel.filter(item => item.id !== id);
-            setDonsMateriel(next);
-            syncLibraryCache({ donsMateriel: next });
-          }
-          break;
-        case 'achat':
-          {
-            const next = achats.filter(item => item.id !== id);
-            setAchats(next);
-            syncLibraryCache({ achats: next });
-          }
-          break;
-      }
-
-      if (tabImpactsAccounting(activeTab)) {
-        dataSyncService.invalidateAccountingCaches();
       }
     }
   };
@@ -323,25 +270,6 @@ const BibliothequePage: React.FC = () => {
     }
 
     return payload;
-  };
-
-  const createLibraryRecord = async (tab: TabType, payload: any) => {
-    switch (tab) {
-      case 'visite':
-        return libraryService.saveVisiteur(payload);
-      case 'dons-financier':
-        return libraryService.saveDonFinancier(payload);
-      case 'dons-materiel':
-        return libraryService.saveDonMateriel(payload);
-      case 'vente':
-        return libraryService.saveVente(payload);
-      case 'achat':
-        return libraryService.saveAchat(payload);
-      case 'emprunt':
-        return libraryService.saveEmprunt(payload);
-      default:
-        return payload;
-    }
   };
 
   const getPasteColumns = () => {
@@ -457,7 +385,7 @@ const BibliothequePage: React.FC = () => {
     }
 
     try {
-      const backendResult = await libraryService.importPaste(activeTab, raw);
+      const backendResult = await importPasteMutation.mutateAsync({ tab: activeTab, raw });
       const createdCount = Number(
         backendResult?.createdCount ??
         backendResult?.created ??
@@ -466,21 +394,6 @@ const BibliothequePage: React.FC = () => {
       );
 
       if (createdCount > 0) {
-        const data = await dataSyncService.getLibraryData(true);
-        const empruntsRestored = deletionService.applyRestorePosition('emprunt', data.emprunts as Emprunt[]);
-        const visiteursRestored = deletionService.applyRestorePosition('visite', data.visiteurs as Visiteur[]);
-        const ventesRestored = deletionService.applyRestorePosition('vente', data.ventes as Vente[]);
-        const donsFinanciersRestored = deletionService.applyRestorePosition('dons-financier', data.donsFinanciers as DonFinancier[]);
-        const donsMaterielRestored = deletionService.applyRestorePosition('dons-materiel', data.donsMateriel as DonMateriel[]);
-        const achatsRestored = deletionService.applyRestorePosition('achat', data.achats as Achat[]);
-
-        setEmprunts(empruntsRestored);
-        setVisiteurs(visiteursRestored);
-        setVentes(ventesRestored);
-        setDonsFinanciers(donsFinanciersRestored);
-        setDonsMateriel(donsMaterielRestored);
-        setAchats(achatsRestored);
-
         return { success: createdCount, failed: 0, errors: [] as string[] };
       }
     } catch {
@@ -501,56 +414,11 @@ const BibliothequePage: React.FC = () => {
       try {
         const rowPayload = buildImportPayload(activeTab, row, headers);
         const preparedPayload = preparePayloadForTab(activeTab, rowPayload);
-        const saved = await createLibraryRecord(activeTab, preparedPayload);
+        const saved = await createRecordMutation.mutateAsync({ tab: activeTab, payload: preparedPayload });
         created.push(saved);
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Erreur import';
         errors.push(`Ligne ${index + (headers ? 2 : 1)}: ${message}`);
-      }
-    }
-
-    if (created.length > 0) {
-      switch (activeTab) {
-        case 'emprunt': {
-          const next = [...emprunts, ...(created as Emprunt[])];
-          setEmprunts(next);
-          syncLibraryCache({ emprunts: next });
-          break;
-        }
-        case 'visite': {
-          const next = [...visiteurs, ...(created as Visiteur[])];
-          setVisiteurs(next);
-          syncLibraryCache({ visiteurs: next });
-          break;
-        }
-        case 'vente': {
-          const next = [...ventes, ...(created as Vente[])];
-          setVentes(next);
-          syncLibraryCache({ ventes: next });
-          break;
-        }
-        case 'dons-financier': {
-          const next = [...donsFinanciers, ...(created as DonFinancier[])];
-          setDonsFinanciers(next);
-          syncLibraryCache({ donsFinanciers: next });
-          break;
-        }
-        case 'dons-materiel': {
-          const next = [...donsMateriel, ...(created as DonMateriel[])];
-          setDonsMateriel(next);
-          syncLibraryCache({ donsMateriel: next });
-          break;
-        }
-        case 'achat': {
-          const next = [...achats, ...(created as Achat[])];
-          setAchats(next);
-          syncLibraryCache({ achats: next });
-          break;
-        }
-      }
-
-      if (tabImpactsAccounting(activeTab)) {
-        dataSyncService.invalidateAccountingCaches();
       }
     }
 
@@ -569,60 +437,11 @@ const BibliothequePage: React.FC = () => {
     if (editingItem) {
       try {
         setApiError('');
-        const updatedItem = await libraryService.updateRecord(activeTab, {
+        await updateRecordMutation.mutateAsync({ tab: activeTab, payload: {
           ...editingItem,
           ...payload,
           id: editingItem.id
-        });
-
-        switch (activeTab) {
-          case 'emprunt':
-            {
-              const next = emprunts.map(item => item.id === editingItem.id ? updatedItem as Emprunt : item);
-              setEmprunts(next);
-              syncLibraryCache({ emprunts: next });
-            }
-            break;
-          case 'visite':
-            {
-              const next = visiteurs.map(item => item.id === editingItem.id ? updatedItem as Visiteur : item);
-              setVisiteurs(next);
-              syncLibraryCache({ visiteurs: next });
-            }
-            break;
-          case 'vente':
-            {
-              const next = ventes.map(item => item.id === editingItem.id ? updatedItem as Vente : item);
-              setVentes(next);
-              syncLibraryCache({ ventes: next });
-            }
-            break;
-          case 'dons-financier':
-            {
-              const next = donsFinanciers.map(item => item.id === editingItem.id ? updatedItem as DonFinancier : item);
-              setDonsFinanciers(next);
-              syncLibraryCache({ donsFinanciers: next });
-            }
-            break;
-          case 'dons-materiel':
-            {
-              const next = donsMateriel.map(item => item.id === editingItem.id ? updatedItem as DonMateriel : item);
-              setDonsMateriel(next);
-              syncLibraryCache({ donsMateriel: next });
-            }
-            break;
-          case 'achat':
-            {
-              const next = achats.map(item => item.id === editingItem.id ? updatedItem as Achat : item);
-              setAchats(next);
-              syncLibraryCache({ achats: next });
-            }
-            break;
-        }
-
-        if (tabImpactsAccounting(activeTab)) {
-          dataSyncService.invalidateAccountingCaches();
-        }
+        } });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Modification non synchronisee avec le serveur';
         if (message.toLowerCase().includes('aucun exercice comptable ouvert')) {
@@ -636,28 +455,7 @@ const BibliothequePage: React.FC = () => {
 
       try {
         setApiError('');
-        switch (activeTab) {
-          case 'visite':
-            newItem = await libraryService.saveVisiteur(newItem);
-            break;
-          case 'dons-financier':
-            newItem = await libraryService.saveDonFinancier(newItem);
-            break;
-          case 'dons-materiel':
-            newItem = await libraryService.saveDonMateriel(newItem);
-            break;
-          case 'vente':
-            newItem = await libraryService.saveVente(newItem);
-            break;
-          case 'achat':
-            newItem = await libraryService.saveAchat(newItem);
-            break;
-          case 'emprunt':
-            newItem = await libraryService.saveEmprunt(newItem);
-            break;
-          default:
-            break;
-        }
+        await createRecordMutation.mutateAsync({ tab: activeTab, payload: newItem });
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Enregistrement API echoue';
         if (message.toLowerCase().includes('aucun exercice comptable ouvert')) {
@@ -666,55 +464,6 @@ const BibliothequePage: React.FC = () => {
           setApiError(message);
         }
         return;
-      }
-
-      switch (activeTab) {
-        case 'emprunt':
-          {
-            const next = [...emprunts, newItem as Emprunt];
-            setEmprunts(next);
-            syncLibraryCache({ emprunts: next });
-          }
-          break;
-        case 'visite':
-          {
-            const next = [...visiteurs, newItem as Visiteur];
-            setVisiteurs(next);
-            syncLibraryCache({ visiteurs: next });
-          }
-          break;
-        case 'vente':
-          {
-            const next = [...ventes, newItem as Vente];
-            setVentes(next);
-            syncLibraryCache({ ventes: next });
-          }
-          break;
-        case 'dons-financier':
-          {
-            const next = [...donsFinanciers, newItem as DonFinancier];
-            setDonsFinanciers(next);
-            syncLibraryCache({ donsFinanciers: next });
-          }
-          break;
-        case 'dons-materiel':
-          {
-            const next = [...donsMateriel, newItem as DonMateriel];
-            setDonsMateriel(next);
-            syncLibraryCache({ donsMateriel: next });
-          }
-          break;
-        case 'achat':
-          {
-            const next = [...achats, newItem as Achat];
-            setAchats(next);
-            syncLibraryCache({ achats: next });
-          }
-          break;
-      }
-
-      if (tabImpactsAccounting(activeTab)) {
-        dataSyncService.invalidateAccountingCaches();
       }
     }
 
@@ -727,7 +476,7 @@ const BibliothequePage: React.FC = () => {
 
       <main className="page-content">
         {loading && <p>Chargement des donnees bibliotheque...</p>}
-        {apiError && <p>{apiError}</p>}
+        {effectiveError && <p>{effectiveError}</p>}
         <div className="library-actions-row">
           <ActionButtons
             onAdd={handleAdd}

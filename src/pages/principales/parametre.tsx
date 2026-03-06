@@ -5,7 +5,7 @@ import AdminInfo from '../../component/parametre/adminInfo';
 import RecentDeletions from '../../component/parametre/recentDeletions';
 import UpdatePanel from '../../component/parametre/updatePanel';
 import defaultCompanyLogo from '../../assets/logo.png';
-import { settingsService } from '../../service/settingsService';
+import { useCompanyProfileQuery, useUpdateCompanyProfileMutation } from '../../hooks/queries/settingsQueries';
 
 const LOCAL_PROFILE_PHOTO_KEY = 'companyProfilePhoto';
 
@@ -17,37 +17,30 @@ const Parametre: React.FC = () => {
     password: '',
     profilePhoto: defaultCompanyLogo,
   });
-  const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState('');
+  const profileQuery = useCompanyProfileQuery();
+  const updateProfileMutation = useUpdateCompanyProfileMutation();
+  const loading = profileQuery.isLoading;
 
   React.useEffect(() => {
-    const loadProfile = async () => {
-      try {
-        setLoading(true);
-        setApiError('');
-        const settings = await settingsService.getCompanySettings();
+    const message = (profileQuery.error as Error | null)?.message || '';
+    if (message.toLowerCase().includes('session expir')) {
+      navigate('/login', { replace: true });
+    }
+  }, [navigate, profileQuery.error]);
 
-        setAdminInfo((prev) => ({
-          ...prev,
-          companyName: settings?.companyName ?? '',
-          companyEmail: settings?.companyEmail ?? '',
-          password: settings?.password ?? '',
-          profilePhoto: settings?.profilePhoto || localStorage.getItem(LOCAL_PROFILE_PHOTO_KEY) || prev.profilePhoto
-        }));
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Erreur de chargement du profil';
-        if (message.toLowerCase().includes('session expir')) {
-          navigate('/login', { replace: true });
-          return;
-        }
-        setApiError(message);
-      } finally {
-        setLoading(false);
-      }
-    };
+  React.useEffect(() => {
+    const settings = profileQuery.data;
+    if (!settings) return;
 
-    void loadProfile();
-  }, [navigate]);
+    setAdminInfo((prev) => ({
+      ...prev,
+      companyName: settings?.companyName ?? '',
+      companyEmail: settings?.companyEmail ?? '',
+      password: settings?.password ?? '',
+      profilePhoto: settings?.profilePhoto || localStorage.getItem(LOCAL_PROFILE_PHOTO_KEY) || prev.profilePhoto
+    }));
+  }, [profileQuery.data]);
 
   const handleUpdateAdminInfo = async (updatedInfo: {
     companyName: string;
@@ -73,7 +66,7 @@ const Parametre: React.FC = () => {
         localStorage.setItem(LOCAL_PROFILE_PHOTO_KEY, updatedInfo.profilePhoto);
       }
 
-      const saved = await settingsService.updateCompanySettings(changedPayload);
+      const saved = await updateProfileMutation.mutateAsync(changedPayload);
       setAdminInfo((prev) => ({
         ...prev,
         ...updatedInfo,
@@ -89,7 +82,7 @@ const Parametre: React.FC = () => {
   return (
     <div className="parametre-container">
       {loading && <p>Chargement du profil...</p>}
-      {apiError && <p>{apiError}</p>}
+      {(apiError || (profileQuery.error as Error | null)?.message) && <p>{apiError || (profileQuery.error as Error | null)?.message}</p>}
 
       <AdminInfo
         adminInfo={adminInfo}

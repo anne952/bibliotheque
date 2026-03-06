@@ -223,6 +223,7 @@
 - `itemName` (optionnel): libelle metier pour la comptabilite (ex: `livre`, `meuble`)
 - `purchaseDate` (optionnel): date explicite de l'achat (accepte une date anterieure si un exercice comptable ouvert couvre cette date)
 - Creates Purchase record + synchronized accounting journal entry (source `PURCHASE`)
+- Note: l'ecriture auto synchronisee est creee en etat non valide (`isValidated=false`)
 - Response: Created purchase object
 - Exemple:
 ```json
@@ -248,6 +249,7 @@
 ### Delete Purchase
 - **DELETE** `/transactions/purchase/:id`
 - Deletes purchase record (and removes legacy purchase stock movements if present)
+- Supprime aussi les ecritures comptables synchronisees liees (`sourceType=PURCHASE`, `sourceId=:id`)
 - Response: 204 No Content
 
 ### Create Sale
@@ -257,6 +259,7 @@
 - `saleDate` (optionnel): date explicite de la vente (accepte une date anterieure si un exercice comptable ouvert couvre cette date)
 - If `materialId` is provided: creates Sale + StockMovement (SALE_OUT) + updates Material stock + synchronized accounting journal entry (source `SALE`)
 - If `itemName` is provided without `materialId`: creates Sale (vente libre) with synchronized accounting journal entry, without stock movement
+- Note: l'ecriture auto synchronisee est creee en etat non valide (`isValidated=false`)
 - Response: Created sale object
 - Exemple vente libre (`itemName` sans `materialId`):
 ```json
@@ -282,6 +285,7 @@
 ### Delete Sale
 - **DELETE** `/transactions/sale/:id`
 - Reverts SALE_OUT stock impact, removes related stock movements, then deletes sale
+- Supprime aussi l'ecriture comptable synchronisee liee (`sourceType=SALE`, `sourceId=:id`)
 - Response: 204 No Content
 
 ### Create Loan
@@ -329,6 +333,7 @@
 - For financial donations: requires amount
 - `donationDate` (optionnel): date explicite du don (accepte une date anterieure si un exercice comptable ouvert couvre cette date pour les dons financiers entrants)
 - Financial donations (direction `IN`) create synchronized accounting journal entries (source `DONATION_FINANCIAL`, `journalType=DONATION`)
+- Note: l'ecriture auto synchronisee est creee en etat non valide (`isValidated=false`)
 - Response: Created donation object
 
 ### Update Donation
@@ -350,6 +355,7 @@
 ### Delete Donation
 - **DELETE** `/transactions/donation/:id`
 - For material donations: reverts stock impact before deletion, then removes related stock movements
+- Supprime aussi les ecritures comptables synchronisees liees (`sourceType in [DONATION_FINANCIAL, DONATION_MATERIAL]`, `sourceId=:id`)
 - Response: 204 No Content
 
 ### Enum tolerance (transactions)
@@ -542,12 +548,15 @@
 
 ### Validate Journal Entry
 - **PUT** `/accounting/entries/:id/validate`
-- Marks entry as validated (can only delete unvalidated entries)
+- Marks entry as validated
 - Response: Updated entry
 
 ### Delete Journal Entry
 - **DELETE** `/accounting/entries/:id`
-- Only unvalidated entries can be deleted
+- Deletion rules:
+  - ecriture non validee: suppression autorisee
+  - ecriture validee manuellement: suppression interdite
+  - ecriture validee auto synchronisee (source `PURCHASE`, `SALE`, `DONATION_FINANCIAL`, `DONATION_MATERIAL`): suppression autorisee
 - Logs to DeletedItem for audit trail
 - Response: 204 No Content
 
@@ -717,7 +726,7 @@ Erreur attendue (`message`):
 - Base alias: `/comptabilite`
 - Exemples:
   - **PUT** `/comptabilite/entries/:id` (modifier une ecriture)
-  - **DELETE** `/comptabilite/entries/:id` (supprimer une ecriture non validee)
+  - **DELETE** `/comptabilite/entries/:id` (meme regles de suppression que `/accounting/entries/:id`)
   - **GET** `/comptabilite/trial-balance?fiscalYearId=<id>`
 - Notes: cet alias pointe sur la meme logique que `/accounting`.
 

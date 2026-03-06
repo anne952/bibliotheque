@@ -1,6 +1,6 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo } from 'react';
 import { FiEdit2, FiTrash2 } from 'react-icons/fi';
-import { balanceService } from '../../service/accounting/balanceService';
+import { useBalanceQuery } from '../../hooks/queries/accountingQueries';
 
 interface BalanceHeaderRow {
   isHeader: true;
@@ -27,26 +27,10 @@ interface BalanceProps {
 const isHeaderRow = (row: BalanceRow): row is BalanceHeaderRow => row.isHeader;
 
 const Balance = ({ searchTerm, period }: BalanceProps) => {
-  const [rows, setRows] = useState<BalanceRow[]>([]);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const loadBalance = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await balanceService.getBalance(period);
-        setRows(data as BalanceRow[]);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Chargement de la balance impossible');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadBalance();
-  }, [period]);
+  const balanceQuery = useBalanceQuery(period);
+  const rows = (balanceQuery.data as BalanceRow[]) || [];
+  const loading = balanceQuery.isLoading;
+  const error = (balanceQuery.error as Error | null)?.message ?? null;
 
   const term = searchTerm.trim().toLowerCase();
 

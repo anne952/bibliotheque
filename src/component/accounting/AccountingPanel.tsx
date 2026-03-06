@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from 'react';
+import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { FiX, FiPlus, FiSearch, FiDownload, FiClipboard } from 'react-icons/fi';
 import JournalComptable from './JournalComptable';
 import JournalCaisse from './JournalCaisse';
@@ -16,10 +17,11 @@ import { donateursService } from '../../service/accounting/donateursService';
 import { resolveFiscalYearIdFromPeriod } from '../../service/accounting/fiscalYear';
 import { exportService, type ExportSection } from '../../service/accounting/exportService';
 import { deletionService, isDeletionBackendMissingError } from '../../service/deletionService';
-import { dataSyncService } from '../../service/dataSyncService';
 import PasteImportModal from '../common/PasteImportModal';
 import { normalizeImportKey, parseClipboardTable, parseImportNumber } from '../../utils/pasteImport';
 import { apiClient } from '../../service/apiClient';
+import { accountingKeys } from '../../query/keys';
+import { useCaisseQuery, useDonateursQuery, useJournalQuery } from '../../hooks/queries/accountingQueries';
 
 interface AccountingPanelProps {
   module: AccountingModule;
@@ -61,26 +63,6 @@ interface DonateurRow {
   valide?: boolean;
 }
 
-const matchesMonthPeriod = (value: string, period: string | null) => {
-  if (!period || !/^\d{1,2}\/\d{4}$/.test(period)) return true;
-  if (!value) return false;
-
-  const toIso = (raw: string) => {
-    if (/^\d{2}\/\d{2}\/\d{4}$/.test(raw)) {
-      const [d, m, y] = raw.split('/');
-      return `${y}-${m}-${d}`;
-    }
-    if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
-    const date = new Date(raw);
-    return Number.isNaN(date.getTime()) ? '' : date.toISOString().slice(0, 10);
-  };
-
-  const iso = toIso(value);
-  if (!iso) return false;
-  const [year, month] = iso.split('-');
-  return `${Number(month)}/${year}` === period;
-};
-
 const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
   const [showForm, setShowForm] = useState(false);
   const [searchTerm, setSearchTerm] = useState('');
@@ -90,12 +72,17 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
   const [showDownloadModal, setShowDownloadModal] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
-  const [journalEntries, setJournalEntries] = useState<JournalEntry[]>([]);
-  const [caisseEntries, setCaisseEntries] = useState<CaisseEntry[]>([]);
-  const [donateurs, setDonateurs] = useState<DonateurRow[]>([]);
-  const [loadingData, setLoadingData] = useState(false);
+  const [loadingExport, setLoadingExport] = useState(false);
   const [validatingAll, setValidatingAll] = useState(false);
   const [apiError, setApiError] = useState<string | null>(null);
+  const queryClient = useQueryClient();
+  const journalQuery = useJournalQuery(selectedPeriod, module.id === 'journal');
+  const caisseQuery = useCaisseQuery(selectedPeriod, module.id === 'caisse');
+  const donateursQuery = useDonateursQuery(selectedPeriod, module.id === 'donateurs');
+  const journalEntries = (journalQuery.data ? deletionService.applyRestorePosition('comptabilite-journal', journalQuery.data) : []) as JournalEntry[];
+  const caisseEntries = (caisseQuery.data ? deletionService.applyRestorePosition('comptabilite-caisse', caisseQuery.data) : []) as CaisseEntry[];
+  const donateurs = (donateursQuery.data ? deletionService.applyRestorePosition('comptabilite-donateur', donateursQuery.data) : []) as DonateurRow[];
+  const loadingData = loadingExport || journalQuery.isFetching || caisseQuery.isFetching || donateursQuery.isFetching;
 
   useEffect(() => {
     const currentYear = new Date().getFullYear();
@@ -129,43 +116,6 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
     setApiError(null);
   }, [module]);
 
-  useEffect(() => {
-    const loadData = async () => {
-      setApiError(null);
-
-      try {
-        setLoadingData(true);
-
-        if (module.id === 'journal') {
-          const all = await dataSyncService.getJournalEntries();
-          const data = (selectedPeriod && /^\d{1,2}\/\d{4}$/.test(selectedPeriod))
-            ? all.filter((entry) => entry.periode === selectedPeriod)
-            : all;
-          setJournalEntries(deletionService.applyRestorePosition('comptabilite-journal', data));
-        }
-
-        if (module.id === 'caisse') {
-          const all = await dataSyncService.getCaisseEntries();
-          const data = all.filter((entry) => matchesMonthPeriod(entry.date, selectedPeriod));
-          setCaisseEntries(deletionService.applyRestorePosition('comptabilite-caisse', data));
-        }
-
-        if (module.id === 'donateurs') {
-          const data = await dataSyncService.getDonateurs();
-          setDonateurs(deletionService.applyRestorePosition('comptabilite-donateur', data));
-        }
-      } catch (error) {
-        setApiError(error instanceof Error ? error.message : 'Erreur de chargement API');
-      } finally {
-        setLoadingData(false);
-      }
-    };
-
-    if (['journal', 'caisse', 'donateurs'].includes(module.id)) {
-      void loadData();
-    }
-  }, [module.id, selectedPeriod]);
-
   const handleOpenCreateForm = () => {
     setEditingIndex(null);
     setShowForm(true);
@@ -178,6 +128,72 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
     setEditingIndex(index);
     setShowForm(true);
   };
+
+  const invalidateCurrentAccountingDomain = async () => {
+    if (module.id === 'journal') {
+      await queryClient.invalidateQueries({ queryKey: accountingKeys.journal(selectedPeriod) });
+      return;
+    }
+    if (module.id === 'caisse') {
+      await queryClient.invalidateQueries({ queryKey: accountingKeys.caisse(selectedPeriod) });
+      return;
+    }
+    if (module.id === 'donateurs') {
+      await queryClient.invalidateQueries({ queryKey: accountingKeys.donateurs(selectedPeriod) });
+    }
+  };
+
+  const deleteEntryMutation = useMutation({
+    mutationFn: async (entry: { id: string; type: 'journal' | 'caisse' | 'donateurs' }) => {
+      if (entry.type === 'journal') {
+        return journalComptableService.supprimerEcriture(entry.id);
+      }
+      if (entry.type === 'caisse') {
+        return journalCaisseService.supprimerOperation(entry.id);
+      }
+      await donateursService.supprimerDonateur(entry.id);
+      return null;
+    },
+    onSuccess: () => {
+      void invalidateCurrentAccountingDomain();
+    }
+  });
+
+  const saveEntryMutation = useMutation({
+    mutationFn: async (args: { mode: 'create' | 'update'; payload: any; id?: string; type: 'journal' | 'caisse' | 'donateurs' }) => {
+      if (args.type === 'journal') {
+        return args.mode === 'update' && args.id
+          ? journalComptableService.modifierEcriture(args.id, args.payload)
+          : journalComptableService.ajouterEcriture(args.payload);
+      }
+      if (args.type === 'caisse') {
+        return args.mode === 'update' && args.id
+          ? journalCaisseService.modifierOperation(args.id, args.payload)
+          : journalCaisseService.ajouterOperation(args.payload);
+      }
+      return args.mode === 'update' && args.id
+        ? donateursService.modifierDonateur(args.id, args.payload)
+        : donateursService.ajouterDonateur(args.payload);
+    },
+    onSuccess: () => {
+      void invalidateCurrentAccountingDomain();
+    }
+  });
+
+  const validateEntryMutation = useMutation({
+    mutationFn: async (args: { id: string; type: 'journal' | 'caisse' | 'donateurs' }) => {
+      if (args.type === 'journal') {
+        return journalComptableService.validerEcriture(args.id);
+      }
+      if (args.type === 'caisse') {
+        return journalCaisseService.validerOperation(args.id);
+      }
+      return donateursService.validerDonateur(args.id);
+    },
+    onSuccess: () => {
+      void invalidateCurrentAccountingDomain();
+    }
+  });
 
   const handleDeleteEntry = async (index: number) => {
     if (index < 0) {
@@ -195,20 +211,10 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
       }
 
       try {
-        const deletionResult = await journalComptableService.supprimerEcriture(target.id);
+        const deletionResult = await deleteEntryMutation.mutateAsync({ id: target.id, type: 'journal' });
 
         if (deletionResult?.mode === 'reversed') {
           setApiError('Ecriture deja validee: suppression impossible. Une contrepassation a ete creee automatiquement.');
-          const all = await dataSyncService.getJournalEntries(true);
-          const data = (selectedPeriod && /^\d{1,2}\/\d{4}$/.test(selectedPeriod))
-            ? all.filter((entry) => entry.periode === selectedPeriod)
-            : all;
-          setJournalEntries(deletionService.applyRestorePosition('comptabilite-journal', data));
-        } else {
-          const all = await dataSyncService.getJournalEntries();
-          const nextAll = all.filter((entry) => entry.id !== target.id);
-          dataSyncService.setJournalEntries(nextAll);
-          setJournalEntries((prev) => prev.filter((_, i) => i !== index));
         }
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Suppression impossible');
@@ -239,11 +245,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
       }
 
       try {
-        await journalCaisseService.supprimerOperation(target.id);
-        const all = await dataSyncService.getCaisseEntries();
-        const nextAll = all.filter((entry) => entry.id !== target.id);
-        dataSyncService.setCaisseEntries(nextAll);
-        setCaisseEntries((prev) => prev.filter((_, i) => i !== index));
+        await deleteEntryMutation.mutateAsync({ id: target.id, type: 'caisse' });
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Suppression impossible');
         return;
@@ -273,11 +275,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
       }
 
       try {
-        await donateursService.supprimerDonateur(target.id);
-        const all = await dataSyncService.getDonateurs();
-        const nextAll = all.filter((entry) => entry.id !== target.id);
-        dataSyncService.setDonateurs(nextAll);
-        setDonateurs((prev) => prev.filter((_, i) => i !== index));
+        await deleteEntryMutation.mutateAsync({ id: target.id, type: 'donateurs' });
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Suppression impossible');
         return;
@@ -328,15 +326,18 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
 
       try {
         if (editingIndex !== null && journalEntries[editingIndex]?.id) {
-          const updated = await journalComptableService.modifierEcriture(journalEntries[editingIndex].id as string, nextEntry);
-          const all = await dataSyncService.getJournalEntries();
-          dataSyncService.setJournalEntries(all.map((item) => (item.id === updated.id ? updated : item)));
-          setJournalEntries((prev) => prev.map((item, idx) => (idx === editingIndex ? updated : item)));
+          await saveEntryMutation.mutateAsync({
+            mode: 'update',
+            type: 'journal',
+            id: journalEntries[editingIndex].id as string,
+            payload: nextEntry
+          });
         } else {
-          const created = await journalComptableService.ajouterEcriture(nextEntry);
-          const all = await dataSyncService.getJournalEntries();
-          dataSyncService.setJournalEntries([...all, created]);
-          setJournalEntries((prev) => [...prev, created]);
+          await saveEntryMutation.mutateAsync({
+            mode: 'create',
+            type: 'journal',
+            payload: nextEntry
+          });
         }
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Enregistrement impossible');
@@ -358,15 +359,18 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
 
       try {
         if (editingIndex !== null && caisseEntries[editingIndex]?.id) {
-          const updated = await journalCaisseService.modifierOperation(caisseEntries[editingIndex].id as string, nextEntry);
-          const all = await dataSyncService.getCaisseEntries();
-          dataSyncService.setCaisseEntries(all.map((item) => (item.id === updated.id ? updated : item)));
-          setCaisseEntries((prev) => prev.map((item, idx) => (idx === editingIndex ? updated : item)));
+          await saveEntryMutation.mutateAsync({
+            mode: 'update',
+            type: 'caisse',
+            id: caisseEntries[editingIndex].id as string,
+            payload: nextEntry
+          });
         } else {
-          const created = await journalCaisseService.ajouterOperation(nextEntry);
-          const all = await dataSyncService.getCaisseEntries();
-          dataSyncService.setCaisseEntries([...all, created]);
-          setCaisseEntries((prev) => [...prev, created]);
+          await saveEntryMutation.mutateAsync({
+            mode: 'create',
+            type: 'caisse',
+            payload: nextEntry
+          });
         }
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Enregistrement impossible');
@@ -387,15 +391,18 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
 
       try {
         if (editingIndex !== null && donateurs[editingIndex]?.id) {
-          const updated = await donateursService.modifierDonateur(donateurs[editingIndex].id as string, nextEntry);
-          const all = await dataSyncService.getDonateurs();
-          dataSyncService.setDonateurs(all.map((item) => (item.id === updated.id ? updated : item)));
-          setDonateurs((prev) => prev.map((item, idx) => (idx === editingIndex ? updated : item)));
+          await saveEntryMutation.mutateAsync({
+            mode: 'update',
+            type: 'donateurs',
+            id: donateurs[editingIndex].id as string,
+            payload: nextEntry
+          });
         } else {
-          const created = await donateursService.ajouterDonateur(nextEntry);
-          const all = await dataSyncService.getDonateurs();
-          dataSyncService.setDonateurs([...all, created]);
-          setDonateurs((prev) => [...prev, created]);
+          await saveEntryMutation.mutateAsync({
+            mode: 'create',
+            type: 'donateurs',
+            payload: nextEntry
+          });
         }
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Enregistrement impossible');
@@ -421,10 +428,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
       }
 
       try {
-        const validated = await journalComptableService.validerEcriture(target.id);
-        const all = await dataSyncService.getJournalEntries();
-        dataSyncService.setJournalEntries(all.map((item) => (item.id === validated.id ? validated : item)));
-        setJournalEntries((prev) => prev.map((item, i) => (i === index ? validated : item)));
+        await validateEntryMutation.mutateAsync({ id: target.id, type: 'journal' });
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Validation impossible');
       }
@@ -438,10 +442,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
       }
 
       try {
-        const validated = await journalCaisseService.validerOperation(target.id);
-        const all = await dataSyncService.getCaisseEntries();
-        dataSyncService.setCaisseEntries(all.map((item) => (item.id === validated.id ? validated : item)));
-        setCaisseEntries((prev) => prev.map((item, i) => (i === index ? validated : item)));
+        await validateEntryMutation.mutateAsync({ id: target.id, type: 'caisse' });
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Validation impossible');
       }
@@ -455,10 +456,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
       }
 
       try {
-        const validated = await donateursService.validerDonateur(target.id);
-        const all = await dataSyncService.getDonateurs();
-        dataSyncService.setDonateurs(all.map((item) => (item.id === validated.id ? { ...item, ...validated } : item)));
-        setDonateurs((prev) => prev.map((item, i) => (i === index ? { ...item, ...validated } : item)));
+        await validateEntryMutation.mutateAsync({ id: target.id, type: 'donateurs' });
       } catch (error) {
         setApiError(error instanceof Error ? error.message : 'Validation impossible');
       }
@@ -476,12 +474,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
           return;
         }
 
-        const validatedEntries = await Promise.all(targets.map((entry) => journalComptableService.validerEcriture(entry.id as string)));
-        const validatedById = new Map(validatedEntries.map((entry) => [entry.id, entry]));
-        const all = await dataSyncService.getJournalEntries();
-        const nextAll = all.map((entry) => validatedById.get(entry.id) ?? entry);
-        dataSyncService.setJournalEntries(nextAll);
-        setJournalEntries((prev) => prev.map((entry) => validatedById.get(entry.id) ?? entry));
+        await Promise.all(targets.map((entry) => validateEntryMutation.mutateAsync({ id: entry.id as string, type: 'journal' })));
         return;
       }
 
@@ -491,12 +484,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
           return;
         }
 
-        const validatedEntries = await Promise.all(targets.map((entry) => journalCaisseService.validerOperation(entry.id as string)));
-        const validatedById = new Map(validatedEntries.map((entry) => [entry.id, entry]));
-        const all = await dataSyncService.getCaisseEntries();
-        const nextAll = all.map((entry) => validatedById.get(entry.id) ?? entry);
-        dataSyncService.setCaisseEntries(nextAll);
-        setCaisseEntries((prev) => prev.map((entry) => validatedById.get(entry.id) ?? entry));
+        await Promise.all(targets.map((entry) => validateEntryMutation.mutateAsync({ id: entry.id as string, type: 'caisse' })));
         return;
       }
 
@@ -506,20 +494,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
           return;
         }
 
-        const validatedEntries = await Promise.all(targets.map((entry) => donateursService.validerDonateur(entry.id as string)));
-        const validatedById = new Map(validatedEntries.map((entry) => [entry.id, entry]));
-        const all = await dataSyncService.getDonateurs();
-        const nextAll = all.map((entry) => {
-          const validated = validatedById.get(entry.id);
-          return validated ? { ...entry, ...validated } : entry;
-        });
-        dataSyncService.setDonateurs(nextAll);
-        setDonateurs((prev) =>
-          prev.map((entry) => {
-            const validated = validatedById.get(entry.id);
-            return validated ? { ...entry, ...validated } : entry;
-          })
-        );
+        await Promise.all(targets.map((entry) => validateEntryMutation.mutateAsync({ id: entry.id as string, type: 'donateurs' })));
       }
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Validation globale impossible');
@@ -592,7 +567,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
   const handleDownloadExport = async () => {
     try {
       setApiError(null);
-      setLoadingData(true);
+      setLoadingExport(true);
       const section = getExportSection();
       const blob = await exportService.exportToExcel(section, selectedPeriod);
       const filename = `${getDownloadTargetLabel().replace(/\s+/g, '_')}_${new Date().getTime()}.xlsx`;
@@ -601,7 +576,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Export echoue');
     } finally {
-      setLoadingData(false);
+      setLoadingExport(false);
     }
   };
 
@@ -650,11 +625,7 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
 
         const createdCount = Number(backendResult?.createdCount ?? backendResult?.created ?? 0);
         if (createdCount > 0) {
-          const all = await dataSyncService.getJournalEntries(true);
-          const data = (selectedPeriod && /^\d{1,2}\/\d{4}$/.test(selectedPeriod))
-            ? all.filter((entry) => entry.periode === selectedPeriod)
-            : all;
-          setJournalEntries(deletionService.applyRestorePosition('comptabilite-journal', data));
+          await queryClient.invalidateQueries({ queryKey: accountingKeys.journal(selectedPeriod) });
           return { success: createdCount, failed: 0, errors: [] as string[] };
         }
       } catch {
@@ -718,24 +689,15 @@ const AccountingPanel = ({ module, onClose }: AccountingPanelProps) => {
     }
 
     if (createdJournal.length > 0) {
-      const all = await dataSyncService.getJournalEntries();
-      const next = [...all, ...createdJournal];
-      dataSyncService.setJournalEntries(next);
-      setJournalEntries((prev) => [...prev, ...createdJournal]);
+      await queryClient.invalidateQueries({ queryKey: accountingKeys.journal(selectedPeriod) });
     }
 
     if (createdCaisse.length > 0) {
-      const all = await dataSyncService.getCaisseEntries();
-      const next = [...all, ...createdCaisse];
-      dataSyncService.setCaisseEntries(next);
-      setCaisseEntries((prev) => [...prev, ...createdCaisse]);
+      await queryClient.invalidateQueries({ queryKey: accountingKeys.caisse(selectedPeriod) });
     }
 
     if (createdDonateurs.length > 0) {
-      const all = await dataSyncService.getDonateurs();
-      const next = [...all, ...createdDonateurs];
-      dataSyncService.setDonateurs(next);
-      setDonateurs((prev) => [...prev, ...createdDonateurs]);
+      await queryClient.invalidateQueries({ queryKey: accountingKeys.donateurs(selectedPeriod) });
     }
 
     return {

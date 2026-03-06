@@ -1,5 +1,5 @@
-import { useEffect, useMemo, useState } from 'react';
-import { compteResultatService } from '../../service/accounting/compteResultatService';
+import { useMemo } from 'react';
+import { useResultatQuery } from '../../hooks/queries/accountingQueries';
 
 interface CompteResultatProps {
   period: string | null;
@@ -23,26 +23,10 @@ const emptyResultat: ResultatData = {
 };
 
 const CompteResultat = ({ period }: CompteResultatProps) => {
-  const [resultatData, setResultatData] = useState<ResultatData>(emptyResultat);
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    const loadResultat = async () => {
-      try {
-        setLoading(true);
-        setError(null);
-        const data = await compteResultatService.getCompteResultat(period);
-        setResultatData(data as ResultatData);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Chargement du compte de resultat impossible');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadResultat();
-  }, [period]);
+  const resultatQuery = useResultatQuery(period);
+  const resultatData = (resultatQuery.data as ResultatData) || emptyResultat;
+  const loading = resultatQuery.isLoading;
+  const error = (resultatQuery.error as Error | null)?.message ?? null;
 
   const totalProduits = useMemo(() => resultatData.produits.reduce((sum, item) => sum + item.montant, 0), [resultatData]);
   const totalCharges = useMemo(() => resultatData.charges.reduce((sum, item) => sum + item.montant, 0), [resultatData]);

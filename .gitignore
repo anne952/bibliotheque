@@ -27,4 +27,13 @@ dist-ssr
 dist/
 *.exe
 *.setup
-/release/
+
+release/
+release-publish/
+dist/
+win-unpacked/
+node_modules/
+
+
+release-publish/
+win-unpacked/

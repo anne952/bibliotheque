@@ -1,6 +1,8 @@
 import React, { useState, useEffect } from 'react';
 import { deletionService, isDeletionBackendMissingError, type DeletedItemRecord } from '../../service/deletionService';
 import { dataSyncService } from '../../service/dataSyncService';
+import { queryClient } from '../../query/client';
+import { accountingKeys, libraryKeys, materialsKeys, reportsKeys } from '../../query/keys';
 
 interface DeletedItem {
   id: string;
@@ -223,6 +225,14 @@ const RecentDeletions: React.FC = () => {
       if (donateurs) {
         dataSyncService.setDonateurs(deletionService.applyRestorePosition('comptabilite-donateur', donateurs));
       }
+
+      // Keep query-based screens in sync with restored backend data.
+      await Promise.allSettled([
+        queryClient.invalidateQueries({ queryKey: libraryKeys.all }),
+        queryClient.invalidateQueries({ queryKey: materialsKeys.all }),
+        queryClient.invalidateQueries({ queryKey: reportsKeys.all }),
+        queryClient.invalidateQueries({ queryKey: accountingKeys.all })
+      ]);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Restauration impossible');
     }

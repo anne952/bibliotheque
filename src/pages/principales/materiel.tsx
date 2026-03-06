@@ -1,5 +1,6 @@
 ﻿import React, { useState } from 'react';
 import { FiClipboard, FiTrash2 } from 'react-icons/fi';
+import { useQueryClient } from '@tanstack/react-query';
 import NavigationVerticale from '../../component/materiel/NavigationVerticale';
 import MaterielTable from '../../component/materiel/MaterielList';
 import MaterielDetail from '../../component/materiel/MaterielDetail';
@@ -9,47 +10,42 @@ import SearchBar from '../../component/SearchBar';
 import PasteImportModal from '../../component/common/PasteImportModal';
 import type { Materiel, TypeMateriel, EtatMateriel, StockOperation } from '../../types/materiel';
 import { materialService } from '../../service/materialService';
-import { dataSyncService } from '../../service/dataSyncService';
 import { deletionService, isDeletionBackendMissingError, type DeletedItemRecord } from '../../service/deletionService';
 import { buildHeaderIndex, getImportCell, hasHeaderAliases, normalizeImportKey, parseClipboardTable, parseImportNumber, type HeaderIndex } from '../../utils/pasteImport';
+import { useAddMaterialMutation, useAddMaterialStockMutation, useDeleteMaterialMutation, useImportMaterialsMutation, useMaterialsQuery, useUpdateMaterialMutation } from '../../hooks/queries/materialsQueries';
+import { materialsKeys } from '../../query/keys';
 import '../principales/css/material.css';
 
 const GestionMaterielPage: React.FC = () => {
-  const [materiels, setMateriels] = useState<Materiel[]>([]);
-
   const [selectedType, setSelectedType] = useState<TypeMateriel>('livre');
   const [selectedMateriel, setSelectedMateriel] = useState<Materiel | null>(null);
   const [showAddModal, setShowAddModal] = useState(false);
   const [showStockModal, setShowStockModal] = useState(false);
   const [showPasteModal, setShowPasteModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [loading, setLoading] = useState(false);
   const [apiError, setApiError] = useState('');
   const [deletedMaterialItems, setDeletedMaterialItems] = useState<DeletedItemRecord[]>([]);
   const [selectedMaterialIds, setSelectedMaterialIds] = useState<string[]>([]);
+  const queryClient = useQueryClient();
+  const materialsQuery = useMaterialsQuery();
+  const addMaterialMutation = useAddMaterialMutation();
+  const updateMaterialMutation = useUpdateMaterialMutation();
+  const deleteMaterialMutation = useDeleteMaterialMutation();
+  const addStockMutation = useAddMaterialStockMutation();
+  const importMaterialsMutation = useImportMaterialsMutation(selectedType);
+  const materiels = (materialsQuery.data ? deletionService.applyRestorePosition('materiel', materialsQuery.data) : []) as Materiel[];
+  const loading = materialsQuery.isLoading;
 
   React.useEffect(() => {
-    const loadMaterials = async () => {
-      try {
-        setLoading(true);
-        setApiError('');
-        const [data, deletedItems] = await Promise.all([
-          dataSyncService.getMaterials(true),
-          deletionService.listDeletedItems().catch(() => [] as DeletedItemRecord[])
-        ]);
-        const restoredOrder = deletionService.applyRestorePosition('materiel', data);
-        setMateriels(restoredOrder);
+    void deletionService.listDeletedItems()
+      .then((deletedItems) => {
         setDeletedMaterialItems(
           deletedItems.filter((item) => item.type === 'materiel' && !item.restored)
         );
-      } catch (error) {
+      })
+      .catch((error) => {
         setApiError(error instanceof Error ? error.message : 'Erreur de chargement des materiels');
-      } finally {
-        setLoading(false);
-      }
-    };
-
-    void loadMaterials();
+      });
   }, []);
 
   const refreshDeletedMaterials = async () => {
@@ -95,10 +91,7 @@ const GestionMaterielPage: React.FC = () => {
   const handleAddMateriel = async (nouveauMateriel: Materiel) => {
     try {
       setApiError('');
-      const created = await materialService.addMaterial(nouveauMateriel);
-      const next = [...materiels, created];
-      setMateriels(next);
-      dataSyncService.setMaterials(next);
+      await addMaterialMutation.mutateAsync(nouveauMateriel);
     } catch (error) {
       setApiError(error instanceof Error ? error.message : 'Ajout impossible');
     }
@@ -107,19 +100,10 @@ const GestionMaterielPage: React.FC = () => {
   const handleAddStockOperation = async (materielId: string, operation: StockOperation) => {
     try {
       setApiError('');
-      const createdOperation = await materialService.addStockEntry(materielId, operation);
-      const updatedMateriels = materiels.map((m) => {
-        if (m.id === materielId) {
-          return { ...m, stockOperations: [...m.stockOperations, createdOperation] };
-        }
-        return m;
-      });
-
-      setMateriels(updatedMateriels);
-      dataSyncService.setMaterials(updatedMateriels);
+      await addStockMutation.mutateAsync({ materialId: materielId, operation });
 
       if (selectedMateriel?.id === materielId) {
-        const updatedMateriel = updatedMateriels.find((m) => m.id === materielId);
+        const updatedMateriel = materiels.find((m) => m.id === materielId);
         if (updatedMateriel) {
           setSelectedMateriel(updatedMateriel);
         }
@@ -130,19 +114,10 @@ const GestionMaterielPage: React.FC = () => {
   };
 
   const handleUpdateEtat = (materielId: string, nouvelEtat: EtatMateriel) => {
-    const updatedMateriels = materiels.map((m) => {
-      if (m.id === materielId) {
-        return { ...m, etat: nouvelEtat };
-      }
-      return m;
-    });
-
-    setMateriels(updatedMateriels);
-    dataSyncService.setMaterials(updatedMateriels);
-
-    if (selectedMateriel?.id === materielId) {
-      setSelectedMateriel({ ...selectedMateriel, etat: nouvelEtat });
-    }
+    const target = materiels.find((m) => m.id === materielId);
+    if (!target) return;
+    void updateMaterialMutation.mutateAsync({ id: materielId, payload: { ...target, etat: nouvelEtat } });
+    if (selectedMateriel?.id === materielId) setSelectedMateriel({ ...selectedMateriel, etat: nouvelEtat });
   };
 
   const handleSelectMateriel = (materiel: Materiel) => {
@@ -162,10 +137,7 @@ const GestionMaterielPage: React.FC = () => {
     const originalIndex = materiels.findIndex((materiel) => materiel.id === materielId);
 
     try {
-      await materialService.deleteMaterial(materielId);
-      const updatedMateriels = materiels.filter((m) => m.id !== materielId);
-      setMateriels(updatedMateriels);
-      dataSyncService.setMaterials(updatedMateriels);
+      await deleteMaterialMutation.mutateAsync(materielId);
       setSelectedMaterialIds((prev) => prev.filter((id) => id !== materielId));
 
       if (selectedMateriel?.id === materielId) {
@@ -231,7 +203,7 @@ const GestionMaterielPage: React.FC = () => {
       const batch = targets.slice(start, start + batchSize);
       const settled = await Promise.allSettled(
         batch.map(async (target) => {
-          await materialService.deleteMaterial(target.id);
+          await deleteMaterialMutation.mutateAsync(target.id);
           return target;
         })
       );
@@ -250,8 +222,7 @@ const GestionMaterielPage: React.FC = () => {
       });
     }
 
-    setMateriels(next);
-    dataSyncService.setMaterials(next);
+    await queryClient.invalidateQueries({ queryKey: materialsKeys.list({}) });
     setSelectedMaterialIds([]);
     if (selectedMateriel && !next.some((item) => item.id === selectedMateriel.id)) {
       setSelectedMateriel(null);
@@ -523,7 +494,7 @@ const GestionMaterielPage: React.FC = () => {
     }
 
     try {
-      const backendResult = await materialService.importPaste(raw, selectedType, normalizedRows);
+      const backendResult = await importMaterialsMutation.mutateAsync({ raw, rows: normalizedRows });
       const success = Number(
         backendResult?.createdCount ??
         backendResult?.created ??
@@ -540,7 +511,7 @@ const GestionMaterielPage: React.FC = () => {
         0
       );
 
-      let refreshed = await dataSyncService.getMaterials(true);
+      let refreshed = await materialService.getAllMaterials();
 
       {
         const computeStock = (material: Materiel) => {
@@ -592,7 +563,7 @@ const GestionMaterielPage: React.FC = () => {
                 raison: 'Import Excel',
                 description: 'Stock initial importe'
               };
-              await materialService.addStockEntry(materialId, stockOperation);
+              await addStockMutation.mutateAsync({ materialId, operation: stockOperation });
             })
           );
 
@@ -604,12 +575,11 @@ const GestionMaterielPage: React.FC = () => {
             backendErrors.push(...stockErrors.slice(0, 3));
           }
 
-          refreshed = await dataSyncService.getMaterials(true);
+          refreshed = await materialService.getAllMaterials();
         }
       }
 
-      const restored = deletionService.applyRestorePosition('materiel', refreshed);
-      setMateriels(restored);
+      await queryClient.invalidateQueries({ queryKey: materialsKeys.list({}) });
       await refreshDeletedMaterials();
 
       return {
@@ -652,7 +622,7 @@ const GestionMaterielPage: React.FC = () => {
         }
 
         try {
-          const createdMaterial = await materialService.addMaterial(materialToCreate);
+          const createdMaterial = await addMaterialMutation.mutateAsync(materialToCreate);
 
           if (built.stockToApply > 0) {
             const stockOperation: StockOperation = {
@@ -663,7 +633,7 @@ const GestionMaterielPage: React.FC = () => {
               raison: 'Import Excel',
               description: 'Stock initial importe'
             };
-            await materialService.addStockEntry(createdMaterial.id, stockOperation);
+            await addStockMutation.mutateAsync({ materialId: createdMaterial.id, operation: stockOperation });
           }
 
           fallbackSuccess += 1;
@@ -674,9 +644,7 @@ const GestionMaterielPage: React.FC = () => {
       }
 
       if (fallbackSuccess > 0) {
-        const refreshed = await dataSyncService.getMaterials(true);
-        const restored = deletionService.applyRestorePosition('materiel', refreshed);
-        setMateriels(restored);
+        await queryClient.invalidateQueries({ queryKey: materialsKeys.list({}) });
         await refreshDeletedMaterials();
       }
 

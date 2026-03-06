@@ -26,6 +26,7 @@ type CreateDeletedItemPayload = {
 
 const getNowIso = () => new Date().toISOString();
 const RESTORE_POSITIONS_KEY = 'deleted_items_restore_positions_v1';
+const LOCAL_DELETED_ITEMS_KEY = 'deleted_items_local_cache_v1';
 const DEFAULT_DELETED_ITEMS_LIMIT = 500;
 
 const toValidIndex = (value: unknown): number | undefined => {
@@ -119,6 +120,11 @@ const parseData = (value: unknown): Record<string, unknown> | null => {
 
 const mapOriginalTableToType = (table?: string) => {
   const normalized = String(table || '').toLowerCase();
+  if (normalized === 'purchase') return 'achat';
+  if (normalized === 'sale') return 'vente';
+  if (normalized === 'loan') return 'emprunt';
+  if (normalized === 'visit' || normalized === 'visitor') return 'visite';
+  if (normalized === 'donation') return 'dons-financier';
   if (normalized === 'material') return 'materiel';
   if (normalized === 'person') return 'utilisateur';
   if (normalized === 'journalentry') return 'comptabilite-journal';
@@ -158,6 +164,79 @@ const sortByDateDesc = (items: DeletedItemRecord[]) => {
   });
 };
 
+const createLocalDeletedItemId = () => {
+  try {
+    if (typeof crypto !== 'undefined' && typeof crypto.randomUUID === 'function') {
+      return `local-${crypto.randomUUID()}`;
+    }
+  } catch {
+    // ignore
+  }
+  return `local-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+};
+
+const normalizeForStorage = (items: DeletedItemRecord[]) => {
+  return items.map((item) => ({
+    ...item,
+    id: item.id || createLocalDeletedItemId(),
+    deletedAt: item.deletedAt || getNowIso(),
+    restored: Boolean(item.restored)
+  }));
+};
+
+const readLocalDeletedItems = (): DeletedItemRecord[] => {
+  if (typeof window === 'undefined') return [];
+  try {
+    const raw = window.localStorage.getItem(LOCAL_DELETED_ITEMS_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw);
+    if (!Array.isArray(parsed)) return [];
+    return sortByDateDesc(parsed.map(normalizeDeletedItem));
+  } catch {
+    return [];
+  }
+};
+
+const writeLocalDeletedItems = (items: DeletedItemRecord[]) => {
+  if (typeof window === 'undefined') return;
+  try {
+    window.localStorage.setItem(LOCAL_DELETED_ITEMS_KEY, JSON.stringify(normalizeForStorage(items)));
+  } catch {
+    // ignore storage errors
+  }
+};
+
+const toMergeKey = (item: DeletedItemRecord) => {
+  const normalizedType = normalizeType(item.type, item.originalTable);
+  const sourceRef = String(item.sourceId || item.originalId || '').trim();
+  if (sourceRef) {
+    return `${normalizedType}::${sourceRef}`;
+  }
+
+  const fallbackId = String(item.id || '').trim();
+  if (fallbackId) {
+    return `${normalizedType}::id::${fallbackId}`;
+  }
+
+  return `${normalizedType}::${item.deletedAt}`;
+};
+
+const mergeById = (preferred: DeletedItemRecord[], secondary: DeletedItemRecord[]) => {
+  const map = new Map<string, DeletedItemRecord>();
+
+  for (const item of secondary) {
+    const key = toMergeKey(item);
+    map.set(key, item);
+  }
+
+  for (const item of preferred) {
+    const key = toMergeKey(item);
+    map.set(key, item);
+  }
+
+  return sortByDateDesc(Array.from(map.values()));
+};
+
 const API_LIST_ENDPOINTS = ['/deleted-items', '/corbeille', '/deleted-items/recent'];
 const API_CREATE_ENDPOINTS = ['/deleted-items', '/corbeille'];
 const API_RESTORE_ENDPOINTS = ['/deleted-items', '/corbeille'];
@@ -172,6 +251,8 @@ export const isDeletionBackendMissingError = (error: unknown) => {
 
 export const deletionService = {
   async listDeletedItems() {
+    const localItems = readLocalDeletedItems();
+
     for (const endpoint of API_LIST_ENDPOINTS) {
       try {
         const result = await apiClient.request<any>(endpoint, {
@@ -189,13 +270,16 @@ export const deletionService = {
               ? result.data
               : [];
 
-        return sortByDateDesc(list.map(normalizeDeletedItem));
+        const remoteItems = sortByDateDesc(list.map(normalizeDeletedItem));
+        const merged = mergeById(remoteItems, localItems);
+        writeLocalDeletedItems(merged);
+        return merged;
       } catch {
         // try next endpoint
       }
     }
 
-    throw new Error(BACKEND_MISSING_MSG);
+    return localItems;
   },
 
   async recordDeletion(payload: CreateDeletedItemPayload) {
@@ -214,7 +298,7 @@ export const deletionService = {
         });
 
         const created = normalizeDeletedItem(result || {
-          id: payload.sourceId || '',
+          id: payload.sourceId || createLocalDeletedItemId(),
           name: payload.name,
           type: payload.type,
           deletedAt: getNowIso(),
@@ -223,6 +307,7 @@ export const deletionService = {
           originalIndex: payload.originalIndex
         });
         storeRestorePosition(payload.type, payload.sourceId, payload.originalIndex);
+        writeLocalDeletedItems(mergeById([created], readLocalDeletedItems()));
         return created;
       } catch {
         // try next endpoint
@@ -230,7 +315,7 @@ export const deletionService = {
     }
 
     const fallback = normalizeDeletedItem({
-      id: payload.sourceId || '',
+      id: payload.sourceId || createLocalDeletedItemId(),
       name: payload.name,
       type: payload.type,
       deletedAt: getNowIso(),
@@ -239,6 +324,7 @@ export const deletionService = {
       originalIndex: payload.originalIndex
     });
     storeRestorePosition(payload.type, payload.sourceId, payload.originalIndex);
+    writeLocalDeletedItems(mergeById([fallback], readLocalDeletedItems()));
     return fallback;
   },
 
@@ -252,7 +338,16 @@ export const deletionService = {
       }
     }
 
-    throw new Error(BACKEND_MISSING_MSG);
+    const updated = readLocalDeletedItems().map((item) => {
+      if (item.id !== itemId) return item;
+      return {
+        ...item,
+        restored: true,
+        restoredAt: getNowIso()
+      };
+    });
+    writeLocalDeletedItems(updated);
+    return sortByDateDesc(updated);
   },
 
   async permanentlyDeleteItem(itemId: string) {
@@ -265,7 +360,9 @@ export const deletionService = {
       }
     }
 
-    throw new Error(BACKEND_MISSING_MSG);
+    const updated = readLocalDeletedItems().filter((item) => item.id !== itemId);
+    writeLocalDeletedItems(updated);
+    return sortByDateDesc(updated);
   },
 
   async purgeRecent(where?: Record<string, unknown>) {
@@ -316,7 +413,27 @@ export const deletionService = {
       }
     }
 
-    throw new Error(BACKEND_MISSING_MSG);
+    const { days, table, onlyNotRestored } = query;
+    const now = Date.now();
+    const maxAgeMs = days ? days * 24 * 60 * 60 * 1000 : undefined;
+
+    const isTableMatch = (item: DeletedItemRecord) => {
+      if (!table) return true;
+      const mapped = mapOriginalTableToType(table);
+      return item.type === mapped || item.originalTable === table;
+    };
+
+    const shouldPurge = (item: DeletedItemRecord) => {
+      if (onlyNotRestored === true && item.restored) return false;
+      if (!isTableMatch(item)) return false;
+      if (!maxAgeMs) return true;
+      const deletedAt = new Date(item.deletedAt).getTime();
+      return Number.isFinite(deletedAt) && now - deletedAt >= maxAgeMs;
+    };
+
+    const updated = readLocalDeletedItems().filter((item) => !shouldPurge(item));
+    writeLocalDeletedItems(updated);
+    return sortByDateDesc(updated);
   },
 
   applyRestorePosition<T extends { id: string }>(type: string, items: T[]) {
@@ -361,23 +478,14 @@ export const deletionService = {
       }
     }
 
-    const items = await this.listDeletedItems();
     const now = Date.now();
     const maxAgeMs = days * 24 * 60 * 60 * 1000;
-
-    const expired = items.filter((item) => {
+    const updated = readLocalDeletedItems().filter((item) => {
       const deletedAt = new Date(item.deletedAt).getTime();
-      return !Number.isNaN(deletedAt) && now - deletedAt > maxAgeMs;
+      if (!Number.isFinite(deletedAt)) return true;
+      return now - deletedAt <= maxAgeMs;
     });
-
-    for (const item of expired) {
-      try {
-        await this.permanentlyDeleteItem(item.id);
-      } catch {
-        // continue with others
-      }
-    }
-
-    return this.listDeletedItems();
+    writeLocalDeletedItems(updated);
+    return sortByDateDesc(updated);
   }
 };
